@@ -29,8 +29,7 @@ Content-Type: application/json
 ```
 
 Autenticação é Bearer com uma chave de serviço aleatória de 32 bytes, injetada por variável de
-ambiente. Consulte o [OpenAPI completo](/contracts/openapi/localembed.v1.yaml) para todos os códigos
-de resposta e formatos.
+ambiente. Consulte o [OpenAPI completo](/api/openapi/) para ler ou baixar o contrato canônico.
 
 ## Especificação navegável
 
