@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{{ description }}">
+    <title>{{ title }} · LocalEmbed</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Pular para o conteúdo</a>
+    <header class="masthead">
+      <a class="brand" href="/"><span class="mark" aria-hidden="true">↗</span>LocalEmbed</a>
+      <nav aria-label="Navegação principal">
+        <a href="/getting-started/">Começar</a>
+        <a href="/contracts/">Contratos</a>
+        <a href="/api/">API</a>
+        <a href="/llms.txt">llms.txt</a>
+      </nav>
+      <button class="theme-toggle" type="button" aria-label="Alternar tema" data-theme-toggle>◐</button>
+    </header>
+    <div class="shell">
+      <aside class="sidebar" aria-label="Navegação da documentação">
+        <p class="eyebrow">DOCUMENTAÇÃO</p>
+        <a href="/getting-started/">Visão geral</a>
+        <a href="/contracts/">Configuração localembed/v1</a>
+        <a href="/api/">Query API</a>
+        <a href="/architecture/">Arquitetura</a>
+        <hr>
+        <a href="/llms.txt">Para modelos de linguagem ↗</a>
+      </aside>
+      <main id="content">{{ content }}</main>
+    </div>
+    <script>
+      const button = document.querySelector('[data-theme-toggle]');
+      const saved = localStorage.getItem('localembed-theme');
+      if (saved) document.documentElement.dataset.theme = saved;
+      button?.addEventListener('click', () => {
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        localStorage.setItem('localembed-theme', next);
+      });
+    </script>
+  </body>
+</html>

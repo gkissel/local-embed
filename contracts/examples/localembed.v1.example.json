@@ -1,0 +1,34 @@
+{
+  "version": "localembed/v1",
+  "providers": [{
+    "name": "local_tei",
+    "type": "tei",
+    "endpoint": "http://tei:8080",
+    "model": "intfloat/multilingual-e5-base",
+    "dimensions": 768,
+    "metric": "cosine",
+    "max_batch_size": 32,
+    "secret_env": "LOCAL_EMBED_TEI_API_KEY"
+  }],
+  "entities": [{
+    "name": "article",
+    "source": {
+      "table": "public.articles",
+      "id": { "column": "id", "type": "uuid" },
+      "detection": { "mode": "trigger" }
+    },
+    "provider": "local_tei",
+    "fields": ["title", "body"],
+    "dependencies": [],
+    "template": "title: {{title}}\n\n{{body}}",
+    "destination": {
+      "table": "localembed.article_embeddings",
+      "hnsw": { "m": 16, "ef_construction": 64 }
+    }
+  }],
+  "operations": {
+    "backfill": { "batch_size": 100 },
+    "retries": { "max_attempts": 5 },
+    "reconciliation": { "interval_seconds": 3600 }
+  }
+}

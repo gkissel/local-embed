@@ -1,0 +1,20 @@
+# LocalEmbed
+
+> Public contracts for a PostgreSQL embedding synchronization system.
+
+## Read first
+
+- [Overview](https://localembed.dev/getting-started/): scope and local commands.
+- [Configuration contract](https://localembed.dev/contracts/): JSON Schema `localembed/v1`.
+- [Query API](https://localembed.dev/api/): OpenAPI contract for `POST /v1/embeddings`.
+- [Architecture](https://localembed.dev/architecture/): future runtime roles and boundaries.
+
+## Primary artifacts
+
+- JSON Schema: `contracts/schema/localembed.v1.schema.json`
+- Canonical configuration: `contracts/examples/localembed.v1.example.json`
+- OpenAPI: `contracts/openapi/localembed.v1.yaml`
+
+## Scope boundary
+
+This version defines contracts and static documentation only. It does not provide a PostgreSQL implementation, queue, worker, embedding inference service, functional HTTP API, or dashboard.
