@@ -3,3 +3,6 @@
 .env.*
 !.env.example
 node_modules/
+_site/
+docs/site/_site/
+docs/site/contracts/

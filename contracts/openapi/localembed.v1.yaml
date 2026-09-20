@@ -1,0 +1,100 @@
+openapi: 3.0.3
+info:
+  title: LocalEmbed Query API
+  version: 1.0.0
+  description: >-
+    Public contract for generating one query embedding from an applied LocalEmbed
+    entity configuration. This API never performs search.
+servers:
+  - url: https://api.localembed.dev
+paths:
+  /v1/embeddings:
+    post:
+      operationId: createEmbedding
+      summary: Generate an embedding for query text
+      security:
+        - serviceApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+            example:
+              entity: article
+              input: Como funciona a sincronização incremental?
+      responses:
+        '200':
+          description: Embedding generated using the entity's applied profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Missing or invalid service key.
+        '404':
+          description: The entity does not exist in the applied configuration.
+        '503':
+          description: The configured embedding provider is unavailable.
+components:
+  securitySchemes:
+    serviceApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: Service key
+      description: A 32-byte random key supplied through the runtime environment.
+  responses:
+    ValidationError:
+      description: Request did not match the public contract.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    EmbeddingRequest:
+      type: object
+      additionalProperties: false
+      required: [entity, input]
+      properties:
+        entity:
+          type: string
+          pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+          description: Name of an entity in the applied configuration.
+        input:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: Query text to embed; it is not persisted by this contract.
+    EmbeddingResponse:
+      type: object
+      additionalProperties: false
+      required: [embedding, dimensions, model, provider, generation]
+      properties:
+        embedding:
+          type: array
+          items: { type: number, format: float }
+          description: Vector in the configured provider's native dimensions.
+        dimensions: { type: integer, minimum: 1, example: 768 }
+        model: { type: string, example: intfloat/multilingual-e5-base }
+        provider: { type: string, example: local_tei }
+        generation:
+          type: object
+          additionalProperties: false
+          required: [config_version, fingerprint]
+          properties:
+            config_version: { type: string, example: localembed/v1 }
+            fingerprint: { type: string, pattern: '^[a-f0-9]{64}$' }
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code: { type: string, example: validation_error }
+            message: { type: string, example: input must not be empty }
