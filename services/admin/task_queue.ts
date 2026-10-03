@@ -80,7 +80,26 @@ export async function installCapture(
     $lock$;
     REVOKE ALL ON FUNCTION ${lock}(text) FROM PUBLIC`);
 
-  const compared = [...new Set([entity.source.id.column, ...(entity.fields ?? [])])];
+  for (const [index, dep] of (entity.dependencies ?? []).entries()) {
+    const lockDep = table(`localembed.lock_dep_${entity.name}_${index}`);
+    const type = { uuid: 'uuid', bigint: 'bigint', text: 'text', ulid: 'text' }[dep.target.id.type];
+    await tx.unsafe(`CREATE OR REPLACE FUNCTION ${lockDep}(identifier text)
+      RETURNS SETOF ${table(dep.target.table)} LANGUAGE sql VOLATILE SECURITY DEFINER
+      SET search_path = pg_catalog AS $lock$
+      SELECT * FROM ${table(dep.target.table)} WHERE ${
+      quote(dep.target.id.column)
+    } = $1::${type} FOR SHARE
+      $lock$; REVOKE ALL ON FUNCTION ${lockDep}(text) FROM PUBLIC`);
+  }
+  if (entity.source.detection.mode === 'polling') return;
+
+  const compared = [
+    ...new Set([
+      entity.source.id.column,
+      ...(entity.fields ?? []),
+      ...(entity.dependencies ?? []).map((dep) => dep.source_column),
+    ]),
+  ];
   // JSONB comparison also supports JSON source columns, which lack SQL equality.
   const values = (record: string) =>
     compared.map((field) => `${record}.${quote(field)}`).join(', ');
@@ -108,4 +127,41 @@ export async function installCapture(
     DROP TRIGGER IF EXISTS ${quote(`localembed_${entity.name}`)} ON ${table(entity.source.table)};
     CREATE TRIGGER ${quote(`localembed_${entity.name}`)} AFTER INSERT OR UPDATE OR DELETE
       ON ${table(entity.source.table)} FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+  for (const [index, dep] of (entity.dependencies ?? []).entries()) {
+    const depFn = table(`localembed.capture_dep_${entity.name}_${index}`);
+    const targetId = quote(dep.target.id.column);
+    const foreign = quote(dep.source_column);
+    const fields = [...new Set([dep.target.id.column, ...dep.fields])];
+    const values = (record: string) =>
+      fields.map((field) => `${record}.${quote(field)}`).join(', ');
+    // Fan-out locks task keys in stable source-ID order. No root row locks are taken.
+    await tx.unsafe(`CREATE OR REPLACE FUNCTION ${depFn}() RETURNS trigger LANGUAGE plpgsql AS $dep$
+      DECLARE affected record;
+      BEGIN
+        IF TG_OP = 'UPDATE' AND jsonb_build_array(${
+      values('OLD')
+    }) IS NOT DISTINCT FROM jsonb_build_array(${values('NEW')}) THEN RETURN NEW; END IF;
+        FOR affected IN SELECT root.${id}::text AS identifier FROM ${
+      table(entity.source.table)
+    } root
+          WHERE (TG_OP <> 'INSERT' AND root.${foreign} = OLD.${targetId})
+             OR (TG_OP <> 'DELETE' AND root.${foreign} = NEW.${targetId})
+          ORDER BY root.${id}
+        LOOP
+          PERFORM localembed.enqueue_task(${revision}, ${
+      literal(entity.name)
+    }, affected.identifier, 'upsert');
+        END LOOP;
+        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+      END $dep$;
+      DROP TRIGGER IF EXISTS ${quote(`le_dep_${entity.name}_${index}`)} ON ${
+      table(dep.target.table)
+    };
+      CREATE TRIGGER ${
+      quote(`le_dep_${entity.name}_${index}`)
+    } AFTER INSERT OR UPDATE OR DELETE ON ${
+      table(dep.target.table)
+    } FOR EACH ROW EXECUTE FUNCTION ${depFn}()`);
+  }
 }

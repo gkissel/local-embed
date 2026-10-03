@@ -39,11 +39,11 @@ persists the applied configuration, provisions a fixed-dimension destination, an
 that enqueue persistent `upsert` and `delete` tasks in the source transaction. No inference runs in
 those triggers. Changes to source identifiers enqueue deletion of the old identifier as well.
 
-This first administrative command supports new entities using trigger detection without content
-dependencies. It rejects existing destinations and unsupported configurations with validation
-errors; configuration updates, polling, and dependencies arrive in later issues. HNSW creation is
-deferred until initial backfill, as specified by the managed-storage ADR. Backfill and index
-creation are separate administrative commands. The trigger executes with the source writer's
+The administrative command supports new entities using trigger or polling detection, including
+explicit many-to-one content dependencies. It rejects existing destinations and unsupported
+configurations with validation errors; updating applied configurations remains issue #6. HNSW
+creation is deferred until initial backfill, as specified by the managed-storage ADR. Backfill and
+index creation are separate administrative commands. The trigger executes with the source writer's
 privileges; source writer roles need schema `USAGE`, `SELECT, INSERT, UPDATE` on `localembed.tasks`,
 `USAGE` on its identity sequence, and `EXECUTE` on
 `localembed.enqueue_task(bigint, text, text, text)`.
@@ -242,3 +242,20 @@ deno test --allow-read --allow-env --allow-net tests/api_integration_test.ts
 ```
 
 See [the implementation improvements and experimental limits](docs/melhorias.md) for article notes.
+
+## Polling and content dependencies
+
+Run `deno task poller` for entities with `source.detection.mode: "polling"`, a unique source ID and
+a non-null `timestamptz` update column. The poller persists timestamp/identifier cursors and
+reconciliation progress, enqueues only work needing synchronization, and installs no capture
+triggers on consumer tables in this mode. Reconciliation handles late commits, physical deletes and
+dependency changes that do not change the root timestamp.
+
+Relations explicitly map a root column to a unique dependency key; templates can render fields such
+as `{{category.name}}`. Trigger mode also captures changes to these dependencies and fans out work
+to affected roots. Workers recheck root and dependency content before committing.
+
+See [setup, correctness policy, permissions and tradeoffs](docs/polling-dependencies.md) and the
+[validated configuration example](contracts/examples/localembed.polling.example.json). Polling
+trades periodic database reads and eventual detection for operation without consumer capture
+triggers. Configuration updates and failed-task reprocessing remain #6.
