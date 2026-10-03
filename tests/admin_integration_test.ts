@@ -66,21 +66,13 @@ Deno.test({
       await sql`UPDATE public.articles SET id = '00000000-0000-0000-0000-000000000002'`;
       await sql`DELETE FROM public.articles`;
       const tasks =
-        await sql`SELECT operation, source_id, status FROM localembed.tasks ORDER BY id`;
+        await sql`SELECT operation, source_id, status, generation FROM localembed.tasks ORDER BY id`;
       assertEquals(tasks.map((t) => t.source_id), [
         '00000000-0000-0000-0000-000000000001',
-        '00000000-0000-0000-0000-000000000001',
-        '00000000-0000-0000-0000-000000000001',
-        '00000000-0000-0000-0000-000000000002',
         '00000000-0000-0000-0000-000000000002',
       ]);
-      assertEquals(tasks.map((t) => t.operation), [
-        'upsert',
-        'upsert',
-        'delete',
-        'upsert',
-        'delete',
-      ]);
+      assertEquals(tasks.map((t) => t.operation), ['delete', 'delete']);
+      assertEquals(tasks.map((t) => Number(t.generation)), [3, 2]);
       assertEquals(
         tasks.every((t) => t.status === 'pending'),
         true,

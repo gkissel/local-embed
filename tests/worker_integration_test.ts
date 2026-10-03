@@ -67,11 +67,12 @@ Deno.test({
       const indexes =
         await sql`SELECT 1 FROM pg_indexes WHERE schemaname = 'localembed' AND indexdef LIKE '%USING hnsw%'`;
       assertEquals(indexes.length, 1);
+      const [beforeRecovery] = await sql`SELECT attempts FROM localembed.tasks WHERE id = 1`;
       await sql`UPDATE localembed.tasks SET status = 'processing', lease_until = now() - interval '1 second' WHERE id = 1`;
       await drain();
       const [recovered] = await sql`SELECT status, attempts FROM localembed.tasks WHERE id = 1`;
       assertEquals(recovered.status, 'done');
-      assertEquals(recovered.attempts, 2);
+      assertEquals(recovered.attempts, beforeRecovery.attempts + 1);
       await sql`DELETE FROM public.articles`;
       await drain();
       const rows = await sql`SELECT * FROM localembed.article_embeddings`;

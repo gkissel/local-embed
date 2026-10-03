@@ -1,3 +1,4 @@
+import { installCapture, installTaskQueue } from './task_queue.ts';
 import postgres from 'postgres';
 import type { Configuration } from './apply.ts';
 
@@ -11,11 +12,25 @@ export async function prepareWorker(url: string): Promise<void> {
       await tx`SELECT pg_advisory_xact_lock(78129412)`;
       await tx.unsafe(
         `UPDATE localembed.configurations SET configuration = (configuration #>> '{}')::jsonb WHERE jsonb_typeof(configuration) = 'string';
-        ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS lease_until timestamptz;
-        ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS last_error text;
-        CREATE INDEX IF NOT EXISTS tasks_available ON localembed.tasks (id) WHERE status IN ('pending', 'processing');
         CREATE TABLE IF NOT EXISTS localembed.backfills (configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, cursor text, complete boolean NOT NULL DEFAULT false, indexed boolean NOT NULL DEFAULT false, PRIMARY KEY(configuration_id, entity));`,
       );
+      const revisions =
+        await tx`SELECT id, configuration FROM localembed.configurations ORDER BY id`;
+      const sources = new Set<string>();
+      for (const revision of revisions) {
+        for (const entity of (revision.configuration as Configuration).entities) {
+          sources.add(entity.source.table);
+        }
+      }
+      for (const source of [...sources].sort()) {
+        await tx.unsafe(`LOCK TABLE ${table(source)} IN SHARE ROW EXCLUSIVE MODE`);
+      }
+      await installTaskQueue(tx);
+      for (const revision of revisions) {
+        for (const entity of (revision.configuration as Configuration).entities) {
+          await installCapture(tx, entity, revision.id);
+        }
+      }
     });
   } finally {
     await sql.end();
@@ -53,7 +68,7 @@ export async function backfill(url: string): Promise<void> {
               [state.cursor, size],
             );
             for (const row of rows) {
-              await tx`INSERT INTO localembed.tasks(configuration_id, entity, source_id, operation) VALUES (${revision.id}, ${entity.name}, ${row.id}, 'upsert')`;
+              await tx`SELECT localembed.enqueue_task(${revision.id}, ${entity.name}, ${row.id}, 'upsert')`;
             }
             finished = rows.length < size;
             await tx`UPDATE localembed.backfills SET cursor = ${
