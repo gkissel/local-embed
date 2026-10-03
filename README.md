@@ -44,8 +44,9 @@ dependencies. It rejects existing destinations and unsupported configurations wi
 errors; configuration updates, polling, and dependencies arrive in later issues. HNSW creation is
 deferred until initial backfill, as specified by the managed-storage ADR. Backfill and index
 creation are separate administrative commands. The trigger executes with the source writer's
-privileges; runtime roles need `USAGE` on `localembed`, `INSERT` on `localembed.tasks`, and `USAGE`
-on its identity sequence.
+privileges; source writer roles need schema `USAGE`, `SELECT, INSERT, UPDATE` on `localembed.tasks`,
+`USAGE` on its identity sequence, and `EXECUTE` on
+`localembed.enqueue_task(bigint, text, text, text)`.
 
 Run the database integration test against a disposable PostgreSQL 18 database with pgvector:
 
@@ -82,12 +83,13 @@ deno task worker
 deno task localembed build-indexes
 ```
 
-For a database provisioned by the first administrative implementation, first run
-`deno task localembed prepare-worker` to add queue lease fields and durable backfill state. New
-migrations include this structure atomically. Backfill resumes from committed keyset batches after
-interruption and repeated execution does not enqueue the same initial batch.
+For an existing database, stop old workers and run `deno task localembed prepare-worker` to upgrade
+the queue, fold duplicate tasks and replace capture functions transactionally. Restart with the
+upgraded worker after granting its locking-read function permissions. New migrations include this
+structure atomically. Backfill resumes from committed keyset batches after interruption and repeated
+execution does not enqueue the same initial batch.
 
-Workers claim tasks with `FOR UPDATE SKIP LOCKED`, use expiring leases, read the latest source
+Workers claim tasks with `FOR UPDATE SKIP LOCKED`, use renewable leases, read the latest source
 content, and update one destination row per source identifier. A SHA-256 fingerprint includes
 rendered content and generation parameters. Unchanged fingerprints skip inference. Before writing,
 the worker checks its lease ownership and verifies the source content again; a change during
@@ -96,10 +98,16 @@ retain a failed task; retry classification and administrative reprocessing belon
 Workers log task identifiers and lifecycle outcomes without content or vectors.
 
 The worker role needs `SELECT` on source tables and configurations, `SELECT, UPDATE` on tasks, and
-`SELECT, INSERT, UPDATE, DELETE` on entity destinations, plus schema `USAGE`. Backfill, worker
-preparation, and index creation use the administrative role. Normal worker startup executes no DDL.
-The initial HNSW build uses a regular transactional index build; schedule it before production query
-load because it blocks destination writes while building.
+`SELECT, INSERT, UPDATE, DELETE` on entity destinations, schema `USAGE`, and `EXECUTE` on the
+entity-specific `localembed.lock_source_<entity>(text)` function. This fixed locking-read function
+uses the administrative owner with a fixed search path; PUBLIC execution is revoked. Grant it only
+to the trusted worker role so it can lock source rows without UPDATE permission on source tables.
+For the reference article entity:
+`GRANT EXECUTE ON FUNCTION localembed.lock_source_article(text)
+TO localembed_worker`. Backfill,
+worker preparation, and index creation use the administrative role. Normal worker startup executes
+no DDL. The initial HNSW build uses a regular transactional index build; schedule it before
+production query load because it blocks destination writes while building.
 
 Inspect progress with:
 
@@ -145,3 +153,38 @@ CREATE EXTENSION IF NOT EXISTS pg_search;
 SHOW server_version;
 SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector', 'pg_search');
 ```
+
+## Queue coordination
+
+Each applied configuration, entity and source identifier owns one reusable task row. UPDATE triggers
+compare only the declared fields and identifier; unrelated fields and unchanged values create no
+task. Relevant changes increment a durable generation counter instead of appending another task. A
+change during inference preserves the active reservation and advances the requested generation; the
+worker discards the old result and leaves the latest generation pending. Completed task rows are
+reused on subsequent changes. Failed tasks remain failed, with their error context preserved even if
+newer source changes arrive, until administrative reprocessing from issue #6. The queue represents
+synchronization state rather than a history of every source update.
+
+Workers reserve different identifiers independently. Each execution has a UUID token, an expiring
+lease and an absolute deadline. Periodic renewal requires the same token and an unexpired lease; an
+expired reservation cannot be resurrected. Cancellation propagates to the provider, and final writes
+verify token, deadline, content and generation. Interrupted work becomes recoverable; a late
+provider response cannot overwrite a replacement worker's result. Reservations are ordered by
+request time so repeatedly changing older records do not always jump ahead of other work.
+
+Configure timing through worker environment variables:
+
+| Variable                       | Default                | Meaning                                               |
+| ------------------------------ | ---------------------- | ----------------------------------------------------- |
+| `LOCAL_EMBED_LEASE_SECONDS`    | `60`                   | Reservation duration                                  |
+| `LOCAL_EMBED_RENEW_EVERY_MS`   | One third of the lease | Renewal interval, shorter than the lease              |
+| `LOCAL_EMBED_MAX_EXECUTION_MS` | `300000`               | Maximum duration of one execution, including renewals |
+
+The provider request also has a 30-second timeout. A server already computing a cancelled request
+may continue its work, and a crash after receiving a vector but before committing can still cause
+repeat inference. Source updates and final writes briefly contend on the source row; final writes
+lock the source before the task to follow the trigger's lock order. Relevant changes still write
+queue state, and renewals add a write each interval. Queue retention, retry policy, configuration
+updates and concurrent HNSW construction remain issues #12, #6 and #13.
+
+See [the reproducible queue workload comparison](docs/queue-coordination.md).

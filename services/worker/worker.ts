@@ -1,11 +1,16 @@
 import postgres from 'postgres';
+import { cancellable, Lease } from './lease.ts';
 import type { Configuration } from '../admin/apply.ts';
 
 export const quote = (s: string) => '"' + s.replaceAll('"', '""') + '"';
 export const table = (s: string) => s.split('.').map(quote).join('.');
 type Entity = Configuration['entities'][number];
 type Provider = Configuration['providers'][number];
-export type Generate = (provider: Provider, text: string) => Promise<number[]>;
+export type Generate = (
+  provider: Provider,
+  text: string,
+  signal?: AbortSignal,
+) => Promise<number[]>;
 export function render(entity: Entity, row: Record<string, unknown>): string {
   return entity.template.replace(
     /\{\{([^}]+)\}\}/g,
@@ -30,7 +35,7 @@ export async function fingerprint(
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(hash), (n) => n.toString(16).padStart(2, '0')).join('');
 }
-export const generate: Generate = async (provider, text) => {
+export const generate: Generate = async (provider, text, signal) => {
   const [{ embed }, { createOpenAI }] = await Promise.all([import('ai'), import('@ai-sdk/openai')]);
   const key = Deno.env.get(provider.secret_env);
   if (!key) throw new Error(`Missing environment variable ${provider.secret_env}`);
@@ -40,33 +45,85 @@ export const generate: Generate = async (provider, text) => {
     model: client.embedding(provider.model),
     value: text,
     maxRetries: 0,
-    abortSignal: AbortSignal.timeout(30000),
+    abortSignal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(30000)])
+      : AbortSignal.timeout(30000),
   });
   return embedding;
 };
 
+export type WorkerOptions = {
+  leaseSeconds?: number;
+  renewEveryMs?: number;
+  maxExecutionMs?: number;
+};
+
 export class Worker {
   private sql: ReturnType<typeof postgres>;
-  constructor(url: string, private inference: Generate = generate, private leaseSeconds = 60) {
-    if (!Number.isFinite(leaseSeconds) || leaseSeconds <= 0) {
-      throw new Error('leaseSeconds must be positive');
+  private options: Required<WorkerOptions>;
+  private executions = new Set<Lease>();
+  private active = new Set<Promise<boolean>>();
+  private stopped = false;
+  private closing?: Promise<void>;
+  constructor(url: string, private inference: Generate = generate, options: WorkerOptions = {}) {
+    const leaseSeconds = options.leaseSeconds ?? 60;
+    this.options = {
+      leaseSeconds,
+      renewEveryMs: options.renewEveryMs ?? leaseSeconds * 1000 / 3,
+      maxExecutionMs: options.maxExecutionMs ?? 300000,
+    };
+    for (const [name, value] of Object.entries(this.options)) {
+      if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`);
     }
-    this.sql = postgres(url, { max: 2 });
+    if (this.options.renewEveryMs >= leaseSeconds * 1000) {
+      throw new Error('renewEveryMs must be shorter than the lease');
+    }
+    this.sql = postgres(url, {
+      max: 2,
+      connection: { statement_timeout: 30000, lock_timeout: 5000 },
+    });
+  }
+  abort(): void {
+    this.stopped = true;
+    for (const execution of this.executions) execution.controller.abort('shutdown');
   }
   close(): Promise<void> {
-    return this.sql.end();
+    if (!this.closing) {
+      this.abort();
+      this.closing = (async () => {
+        await Promise.allSettled([...this.active]);
+        await this.sql.end();
+      })();
+    }
+    return this.closing;
   }
-  /** Claims one task without blocking other replicas. Expired leases are reclaimable. */
-  async tick(): Promise<boolean> {
+  tick(): Promise<boolean> {
+    if (this.stopped) return Promise.resolve(false);
+    const operation = this.processOne();
+    this.active.add(operation);
+    return operation.finally(() => this.active.delete(operation));
+  }
+  /** A unique queue key means only one valid reservation exists for each identifier. */
+  private async processOne(): Promise<boolean> {
     const sql = this.sql;
+    const token = crypto.randomUUID();
+    const { leaseSeconds, renewEveryMs, maxExecutionMs } = this.options;
     const [task] = await sql`WITH candidate AS (
       SELECT id FROM localembed.tasks
-      WHERE status = 'pending' OR (status = 'processing' AND lease_until < now())
-      ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
+      WHERE status = 'pending' OR (status = 'processing' AND lease_until < clock_timestamp())
+      ORDER BY requested_at, id FOR UPDATE SKIP LOCKED LIMIT 1
     ) UPDATE localembed.tasks t SET status = 'processing', attempts = attempts + 1,
-      lease_until = now() + ${this.leaseSeconds} * interval '1 second'
+      lease_token = ${token}::uuid,
+      execution_deadline = clock_timestamp() + ${maxExecutionMs} * interval '1 millisecond',
+      lease_until = clock_timestamp() + ${
+      Math.min(leaseSeconds * 1000, maxExecutionMs)
+    } * interval '1 millisecond'
       FROM candidate c WHERE t.id = c.id RETURNING t.*`;
     if (!task) return false;
+    const lease = new Lease(sql, task.id, token, leaseSeconds, renewEveryMs, maxExecutionMs);
+    this.executions.add(lease);
+    if (this.stopped) lease.controller.abort('shutdown');
+    let outcome = 'task_discarded';
     try {
       const [revision] =
         await sql`SELECT configuration FROM localembed.configurations WHERE id = ${task.configuration_id}`;
@@ -87,28 +144,33 @@ export class Worker {
         } WHERE source_id = $1::${idType}`,
         [task.source_id],
       );
+      lease.signal.throwIfAborted();
       const vector = row && stored?.fingerprint !== hash
-        ? await this.inference(provider, text)
+        ? await cancellable(this.inference(provider, text, lease.signal), lease.signal)
         : null;
       if (
         vector &&
         (vector.length !== provider.dimensions ||
           !vector.every((n) => typeof n === 'number' && Number.isFinite(n)))
-      ) throw new Error(`Provider returned invalid embedding dimensions or values`);
+      ) throw new Error('Provider returned invalid embedding dimensions or values');
+      lease.signal.throwIfAborted();
       await sql.begin(async (tx) => {
-        const [owned] =
-          await tx`SELECT id FROM localembed.tasks WHERE id = ${task.id} AND attempts = ${task.attempts} AND status = 'processing' AND lease_until > now() FOR UPDATE`;
-        if (!owned) return;
-        // Serializes final writes, including absent source rows, across replicas.
-        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${
-          entity.destination.table + ':' + task.source_id
-        }, 0))`;
-        const [current] = await tx.unsafe(sourceQuery + ' FOR SHARE', [task.source_id]);
+        // Source writers lock the source before enqueueing. Follow the same order
+        // so an update cannot deadlock with the worker's final transaction.
+        const [current] = await tx.unsafe(
+          `SELECT * FROM ${table('localembed.lock_source_' + entity.name)}($1::text)`,
+          [task.source_id],
+        );
         const currentHash = current
           ? await fingerprint(entity, provider, render(entity, current))
           : null;
-        if (currentHash !== hash) {
-          await tx`UPDATE localembed.tasks SET status = 'pending', lease_until = NULL WHERE id = ${task.id}`;
+        const [owned] = await tx`SELECT generation FROM localembed.tasks
+          WHERE id = ${task.id} AND lease_token = ${token}::uuid AND status = 'processing'
+            AND lease_until > clock_timestamp() AND execution_deadline > clock_timestamp() FOR UPDATE`;
+        if (!owned || lease.signal.aborted) return;
+        if (owned.generation !== task.generation || currentHash !== hash) {
+          await tx`UPDATE localembed.tasks SET status = 'pending', requested_at = clock_timestamp(), lease_until = NULL, lease_token = NULL, execution_deadline = NULL WHERE id = ${task.id}`;
+          outcome = 'task_requeued';
           return;
         }
         if (!current) {
@@ -124,7 +186,6 @@ export class Worker {
             [task.source_id, JSON.stringify(vector), hash!, task.configuration_id],
           );
         } else {
-          // Another replica may have removed the destination since the first read.
           const [present] = await tx.unsafe(
             `SELECT fingerprint FROM ${
               table(entity.destination.table)
@@ -132,22 +193,36 @@ export class Worker {
             [task.source_id],
           );
           if (present?.fingerprint !== hash) {
-            await tx`UPDATE localembed.tasks SET status = 'pending', lease_until = NULL WHERE id = ${task.id}`;
+            await tx`UPDATE localembed.tasks SET status = 'pending', requested_at = clock_timestamp(), lease_until = NULL, lease_token = NULL, execution_deadline = NULL WHERE id = ${task.id}`;
+            outcome = 'task_requeued';
             return;
           }
         }
-        await tx`UPDATE localembed.tasks SET status = 'done', lease_until = NULL, last_error = NULL WHERE id = ${task.id}`;
+        const completed =
+          await tx`UPDATE localembed.tasks SET status = 'done', processed_generation = generation,
+          lease_until = NULL, lease_token = NULL, execution_deadline = NULL, last_error = NULL
+          WHERE id = ${task.id} AND lease_token = ${token}::uuid
+            AND lease_until > clock_timestamp() AND execution_deadline > clock_timestamp() RETURNING id`;
+        if (!completed.length || lease.signal.aborted) {
+          throw new Error('Execution expired before completion');
+        }
+        outcome = 'task_processed';
       });
-      console.log(
-        JSON.stringify({ event: 'task_processed', task_id: task.id, entity: task.entity }),
-      );
     } catch {
-      // Detailed provider classification and administrative retries belong to issue #6.
-      await sql`UPDATE localembed.tasks SET status = 'failed', lease_until = NULL, last_error = 'processing failed' WHERE id = ${task.id} AND attempts = ${task.attempts} AND status = 'processing'`;
-      console.error(
-        JSON.stringify({ event: 'task_failed', task_id: task.id, entity: task.entity }),
-      );
+      // A newer generation must survive failures in processing the older one.
+      const rows = await sql`UPDATE localembed.tasks SET
+        status = CASE WHEN generation <> ${task.generation} OR ${lease.signal.aborted} THEN 'pending' ELSE 'failed' END,
+        requested_at = clock_timestamp(),
+        last_error = ${lease.signal.aborted ? 'execution interrupted' : 'processing failed'},
+        lease_until = NULL, lease_token = NULL, execution_deadline = NULL
+        WHERE id = ${task.id} AND lease_token = ${token}::uuid AND status = 'processing' RETURNING status`;
+      outcome = rows[0]?.status === 'failed' ? 'task_failed' : 'task_requeued';
+      if (!rows.length) outcome = 'task_discarded';
+    } finally {
+      await lease.stop();
+      this.executions.delete(lease);
     }
+    console.log(JSON.stringify({ event: outcome, task_id: task.id, entity: task.entity }));
     return true;
   }
 }

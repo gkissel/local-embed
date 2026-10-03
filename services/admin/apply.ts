@@ -1,3 +1,4 @@
+import { installCapture, installTaskQueue } from './task_queue.ts';
 import AjvModule from 'ajv/dist/2020.js';
 import formatsModule from 'ajv-formats';
 import postgres from 'postgres';
@@ -64,6 +65,8 @@ export function validateConfiguration(value: unknown): Configuration {
         'localembed.configurations',
         'localembed.backfills',
         'localembed.tasks_available',
+        'localembed.tasks_key',
+        'localembed.tasks_ready',
       ].includes(entity.destination.table)
     ) {
       throw new Error(`${entity.name}: reserved destination`);
@@ -199,9 +202,8 @@ export async function applyConfiguration(
       }
       await tx.unsafe(`CREATE SCHEMA IF NOT EXISTS localembed;
         CREATE TABLE IF NOT EXISTS localembed.configurations (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration jsonb NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());
-        CREATE TABLE IF NOT EXISTS localembed.tasks (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, source_id text NOT NULL, operation text NOT NULL CHECK (operation IN ('upsert','delete')), status text NOT NULL DEFAULT 'pending', attempts integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now(), lease_until timestamptz, last_error text);
-        CREATE INDEX IF NOT EXISTS tasks_available ON localembed.tasks (id) WHERE status IN ('pending', 'processing');
         CREATE TABLE IF NOT EXISTS localembed.backfills (configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, cursor text, complete boolean NOT NULL DEFAULT false, indexed boolean NOT NULL DEFAULT false, PRIMARY KEY(configuration_id, entity));`);
+      await installTaskQueue(tx);
       const [revision] = await tx`INSERT INTO localembed.configurations (configuration) VALUES (${
         tx.json(config as unknown as postgres.JSONValue)
       }) RETURNING id`;
@@ -213,31 +215,7 @@ export async function applyConfiguration(
         await tx.unsafe(
           `CREATE TABLE ${destination} (source_id ${idType} PRIMARY KEY, embedding vector(${provider.dimensions}) NOT NULL, fingerprint text NOT NULL, configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), updated_at timestamptz NOT NULL DEFAULT now())`,
         );
-        const fn = table(`localembed.capture_${entity.name}`);
-        // Entity names are schema-validated identifiers; literals are still parameterized via quote escaping.
-        const literal = (s: string) => "'" + s.replaceAll("'", "''") + "'";
-        await tx.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $capture$
-          BEGIN
-            IF TG_OP = 'DELETE' OR (TG_OP = 'UPDATE' AND OLD.${
-          quote(entity.source.id.column)
-        } IS DISTINCT FROM NEW.${quote(entity.source.id.column)}) THEN
-              INSERT INTO localembed.tasks(configuration_id, entity, source_id, operation) VALUES (${revision.id}, ${
-          literal(entity.name)
-        }, OLD.${quote(entity.source.id.column)}::text, 'delete');
-            END IF;
-            IF TG_OP <> 'DELETE' THEN
-              INSERT INTO localembed.tasks(configuration_id, entity, source_id, operation) VALUES (${revision.id}, ${
-          literal(entity.name)
-        }, NEW.${quote(entity.source.id.column)}::text, 'upsert');
-              RETURN NEW;
-            END IF;
-            RETURN OLD;
-          END $capture$;
-          CREATE TRIGGER ${
-          quote(`localembed_${entity.name}`)
-        } AFTER INSERT OR UPDATE OR DELETE ON ${
-          table(entity.source.table)
-        } FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+        await installCapture(tx, entity, revision.id);
       }
     });
   } finally {
