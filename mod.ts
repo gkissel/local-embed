@@ -1,2 +1,5 @@
-/** Public LocalEmbed modules will be exported here as services are introduced. */
-export {};
+export {
+  applyConfiguration,
+  type Configuration,
+  validateConfiguration,
+} from './services/admin/apply.ts';
