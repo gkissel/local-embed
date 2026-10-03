@@ -58,7 +58,14 @@ export function validateConfiguration(value: unknown): Configuration {
     if (!entity.destination.table.startsWith('localembed.')) {
       throw new Error(`${entity.name}: destination must use localembed schema`);
     }
-    if (['localembed.tasks', 'localembed.configurations'].includes(entity.destination.table)) {
+    if (
+      [
+        'localembed.tasks',
+        'localembed.configurations',
+        'localembed.backfills',
+        'localembed.tasks_available',
+      ].includes(entity.destination.table)
+    ) {
       throw new Error(`${entity.name}: reserved destination`);
     }
     if (destinations.has(entity.destination.table)) {
@@ -77,6 +84,9 @@ export function validateConfiguration(value: unknown): Configuration {
       if (!entity.fields?.includes(match[1])) {
         throw new Error(`${entity.name}: template field ${match[1]} is not declared`);
       }
+    }
+    if ((entity.destination.hnsw?.ef_construction ?? 64) < 2 * (entity.destination.hnsw?.m ?? 16)) {
+      throw new Error(`${entity.name}: HNSW ef_construction must be at least twice m`);
     }
     for (
       const identifier of [
@@ -155,7 +165,9 @@ export async function applyConfiguration(
       for (const entity of config.entities) {
         await tx.unsafe(`LOCK TABLE ${table(entity.source.table)} IN SHARE ROW EXCLUSIVE MODE`);
         const columns =
-          await tx`SELECT a.attname, t.typname, a.attnotnull FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid WHERE a.attrelid = to_regclass(${entity.source.table}) AND a.attnum > 0 AND NOT a.attisdropped`;
+          await tx`SELECT a.attname, t.typname, a.attnotnull FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid WHERE a.attrelid = to_regclass(${
+            table(entity.source.table)
+          }) AND a.attnum > 0 AND NOT a.attisdropped`;
         const id = columns.find((c) => c.attname === entity.source.id.column);
         const expected =
           { uuid: 'uuid', bigint: 'int8', text: 'text', ulid: 'text' }[entity.source.id.type];
@@ -165,7 +177,9 @@ export async function applyConfiguration(
           );
         }
         const unique =
-          await tx`SELECT 1 FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0] WHERE i.indrelid = to_regclass(${entity.source.table}) AND i.indisunique AND i.indisvalid AND i.indnkeyatts = 1 AND i.indpred IS NULL AND i.indexprs IS NULL AND a.attname = ${entity.source.id.column}`;
+          await tx`SELECT 1 FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0] WHERE i.indrelid = to_regclass(${
+            table(entity.source.table)
+          }) AND i.indisunique AND i.indisvalid AND i.indnkeyatts = 1 AND i.indpred IS NULL AND i.indexprs IS NULL AND a.attname = ${entity.source.id.column}`;
         if (!unique.length) {
           throw new Error(`${entity.name}: source ID needs a single-column unique index`);
         }
@@ -174,7 +188,9 @@ export async function applyConfiguration(
             throw new Error(`${entity.name}: source field ${field} does not exist`);
           }
         }
-        const existing = await tx`SELECT to_regclass(${entity.destination.table}) AS destination`;
+        const existing = await tx`SELECT to_regclass(${
+          table(entity.destination.table)
+        }) AS destination`;
         if (existing[0].destination) {
           throw new Error(
             `${entity.name}: destination already exists; configuration updates are not yet supported`,
@@ -183,10 +199,12 @@ export async function applyConfiguration(
       }
       await tx.unsafe(`CREATE SCHEMA IF NOT EXISTS localembed;
         CREATE TABLE IF NOT EXISTS localembed.configurations (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration jsonb NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());
-        CREATE TABLE IF NOT EXISTS localembed.tasks (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, source_id text NOT NULL, operation text NOT NULL CHECK (operation IN ('upsert','delete')), status text NOT NULL DEFAULT 'pending', attempts integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now());`);
+        CREATE TABLE IF NOT EXISTS localembed.tasks (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, source_id text NOT NULL, operation text NOT NULL CHECK (operation IN ('upsert','delete')), status text NOT NULL DEFAULT 'pending', attempts integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now(), lease_until timestamptz, last_error text);
+        CREATE INDEX IF NOT EXISTS tasks_available ON localembed.tasks (id) WHERE status IN ('pending', 'processing');
+        CREATE TABLE IF NOT EXISTS localembed.backfills (configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, cursor text, complete boolean NOT NULL DEFAULT false, indexed boolean NOT NULL DEFAULT false, PRIMARY KEY(configuration_id, entity));`);
       const [revision] = await tx`INSERT INTO localembed.configurations (configuration) VALUES (${
-        JSON.stringify(config)
-      }::jsonb) RETURNING id`;
+        tx.json(config as unknown as postgres.JSONValue)
+      }) RETURNING id`;
       for (const entity of config.entities) {
         const provider = config.providers.find((p) => p.name === entity.provider)!;
         const destination = table(entity.destination.table);

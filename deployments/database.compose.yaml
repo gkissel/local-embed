@@ -1,0 +1,17 @@
+services:
+  database:
+    image: paradedb/paradedb:0.22.6-pg18@sha256:2359a3628682f2dfc4ee65ed59f6a993d7851ed3d820b0c030c397ff7168b620
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: localembed
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - database-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d localembed"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  database-data:

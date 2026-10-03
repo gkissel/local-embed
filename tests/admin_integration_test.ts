@@ -49,6 +49,9 @@ Deno.test({
         'provider unavailable',
       );
       await applyConfiguration(url, example, probe);
+      const [applied] =
+        await sql`SELECT jsonb_typeof(configuration) AS type FROM localembed.configurations`;
+      assertEquals(applied.type, 'object');
       await sql`INSERT INTO public.articles VALUES ('00000000-0000-0000-0000-000000000001', 'Title', 'Body')`;
       await sql`UPDATE public.articles SET title = 'Changed'`;
       await assertRejects(
