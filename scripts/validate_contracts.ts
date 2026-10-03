@@ -17,16 +17,17 @@ const addFormats = addFormatsModule as unknown as (ajv: Ajv) => void;
 export async function validateContracts(): Promise<void> {
   const root = new URL('../', import.meta.url);
   const schema = await readJson(new URL('contracts/schema/localembed.v1.schema.json', root));
-  const example = await readJson(new URL('contracts/examples/localembed.v1.example.json', root));
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   addFormats(ajv);
   const validate = ajv.compile(schema);
-
-  if (!validate(example)) {
-    const details = (validate.errors ?? [])
-      .map((error) => `  ${error.instancePath || '/'} ${error.message}`)
-      .join('\n');
-    throw new Error(`Canonical JSON Schema example is invalid:\n${details}`);
+  for (const filename of ['localembed.v1.example.json', 'localembed.polling.example.json']) {
+    const example = await readJson(new URL(`contracts/examples/${filename}`, root));
+    if (!validate(example)) {
+      const details = (validate.errors ?? [])
+        .map((error) => `  ${error.instancePath || '/'} ${error.message}`)
+        .join('\n');
+      throw new Error(`JSON Schema example ${filename} is invalid:\n${details}`);
+    }
   }
 
   try {
@@ -37,7 +38,7 @@ export async function validateContracts(): Promise<void> {
     );
   }
 
-  console.log('Validated localembed/v1 JSON Schema canonical example.');
+  console.log('Validated localembed/v1 JSON Schema canonical and polling examples.');
   console.log('Validated localembed/v1 OpenAPI document.');
 }
 

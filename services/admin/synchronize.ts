@@ -1,5 +1,6 @@
 import { installCapture, installTaskQueue } from './task_queue.ts';
 import postgres from 'postgres';
+import { installPollingState } from './polling_state.ts';
 import type { Configuration } from './apply.ts';
 
 const quote = (s: string) => '"' + s.replaceAll('"', '""') + '"';
@@ -20,12 +21,14 @@ export async function prepareWorker(url: string): Promise<void> {
       for (const revision of revisions) {
         for (const entity of (revision.configuration as Configuration).entities) {
           sources.add(entity.source.table);
+          for (const dep of entity.dependencies ?? []) sources.add(dep.target.table);
         }
       }
       for (const source of [...sources].sort()) {
         await tx.unsafe(`LOCK TABLE ${table(source)} IN SHARE ROW EXCLUSIVE MODE`);
       }
       await installTaskQueue(tx);
+      await installPollingState(tx);
       for (const revision of revisions) {
         for (const entity of (revision.configuration as Configuration).entities) {
           await installCapture(tx, entity, revision.id);

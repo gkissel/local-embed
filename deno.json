@@ -13,7 +13,7 @@
     "ajv-formats": "npm:ajv-formats@^3.0.1"
   },
   "tasks": {
-    "check": "deno fmt --check deno.json mod.ts README.md contracts services scripts docs/site tests && deno lint services scripts docs/site tests && deno check scripts/prepare_docs.ts scripts/validate_contracts.ts docs/site/_config.ts tests/contracts_test.ts services/admin/main.ts services/worker/main.ts scripts/measure_queue.ts services/api/main.ts",
+    "check": "deno fmt --check deno.json mod.ts README.md contracts services scripts docs/site tests && deno lint services scripts docs/site tests && deno check scripts/prepare_docs.ts scripts/validate_contracts.ts docs/site/_config.ts tests/contracts_test.ts services/admin/main.ts services/worker/main.ts scripts/measure_queue.ts services/api/main.ts services/poller/main.ts",
     "validate:contracts": "deno run --allow-read --allow-net --allow-env scripts/validate_contracts.ts",
     "docs:prepare": "deno run --allow-read --allow-write scripts/prepare_docs.ts",
     "docs:build": "deno task docs:prepare && deno task --cwd docs/site build",
@@ -22,7 +22,8 @@
     "localembed": "deno run --allow-read --allow-env --allow-net services/admin/main.ts",
     "test:integration": "deno test --allow-read --allow-env --allow-net tests/*integration_test.ts",
     "worker": "deno run --allow-env --allow-net services/worker/main.ts",
-    "api": "deno run --allow-env --allow-net services/api/main.ts"
+    "api": "deno run --allow-env --allow-net services/api/main.ts",
+    "poller": "deno run --allow-env --allow-net services/poller/main.ts"
   },
   "fmt": {
     "lineWidth": 100,

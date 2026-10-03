@@ -1,0 +1,68 @@
+{
+  "version": "localembed/v1",
+  "providers": [
+    {
+      "name": "local_tei",
+      "type": "tei",
+      "endpoint": "http://localhost:8080",
+      "model": "intfloat/multilingual-e5-base",
+      "dimensions": 768,
+      "metric": "cosine",
+      "max_batch_size": 32,
+      "secret_env": "LOCAL_EMBED_TEI_API_KEY"
+    }
+  ],
+  "entities": [
+    {
+      "name": "product",
+      "source": {
+        "table": "public.products",
+        "id": {
+          "column": "id",
+          "type": "bigint"
+        },
+        "detection": {
+          "mode": "polling",
+          "updated_at": "updated_at",
+          "overlap_seconds": 60
+        }
+      },
+      "provider": "local_tei",
+      "fields": [
+        "title"
+      ],
+      "dependencies": [
+        {
+          "name": "category",
+          "relation": "one",
+          "fields": [
+            "name"
+          ],
+          "source_column": "category_id",
+          "target": {
+            "table": "public.categories",
+            "id": {
+              "column": "id",
+              "type": "bigint"
+            }
+          }
+        }
+      ],
+      "template": "passage: {{title}}\ncategory: {{category.name}}",
+      "destination": {
+        "table": "localembed.product_embeddings"
+      }
+    }
+  ],
+  "operations": {
+    "backfill": {
+      "batch_size": 100
+    },
+    "retries": {
+      "max_attempts": 5
+    },
+    "reconciliation": {
+      "interval_seconds": 3600
+    }
+  }
+}

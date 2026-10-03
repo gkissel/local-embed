@@ -2,8 +2,8 @@ import postgres from 'postgres';
 import { cancellable, Lease } from './lease.ts';
 import type { Configuration } from '../admin/apply.ts';
 
-export const quote = (s: string) => '"' + s.replaceAll('"', '""') + '"';
-export const table = (s: string) => s.split('.').map(quote).join('.');
+import { readContent, table } from './content.ts';
+export { quote, table } from './content.ts';
 type Entity = Configuration['entities'][number];
 type Provider = Configuration['providers'][number];
 export type Generate = (
@@ -132,10 +132,7 @@ export class Worker {
       const provider = config.providers.find((p) => p.name === entity.provider)!;
       const idType =
         { uuid: 'uuid', bigint: 'bigint', text: 'text', ulid: 'text' }[entity.source.id.type];
-      const sourceQuery = `SELECT * FROM ${table(entity.source.table)} WHERE ${
-        quote(entity.source.id.column)
-      } = $1::${idType}`;
-      const [row] = await sql.unsafe(sourceQuery, [task.source_id]);
+      const row = await readContent(sql, entity, task.source_id);
       const text = row ? render(entity, row) : '';
       const hash = row ? await fingerprint(entity, provider, text) : null;
       const [stored] = await sql.unsafe(
@@ -157,10 +154,7 @@ export class Worker {
       await sql.begin(async (tx) => {
         // Source writers lock the source before enqueueing. Follow the same order
         // so an update cannot deadlock with the worker's final transaction.
-        const [current] = await tx.unsafe(
-          `SELECT * FROM ${table('localembed.lock_source_' + entity.name)}($1::text)`,
-          [task.source_id],
-        );
+        const current = await readContent(tx, entity, task.source_id, true);
         const currentHash = current
           ? await fingerprint(entity, provider, render(entity, current))
           : null;

@@ -1,4 +1,5 @@
 import { installCapture, installTaskQueue } from './task_queue.ts';
+import { installPollingState } from './polling_state.ts';
 import AjvModule from 'ajv/dist/2020.js';
 import formatsModule from 'ajv-formats';
 import postgres from 'postgres';
@@ -13,12 +14,23 @@ type Provider = {
   metric: 'cosine' | 'dot_product' | 'l2';
   secret_env: string;
 };
+export type Dependency = {
+  name: string;
+  relation: 'one' | 'many';
+  fields: string[];
+  source_column: string;
+  target: { table: string; id: { column: string; type: string } };
+};
 type Entity = {
   name: string;
-  source: { table: string; id: { column: string; type: string }; detection: { mode: string } };
+  source: {
+    table: string;
+    id: { column: string; type: string };
+    detection: { mode: string; updated_at?: string; overlap_seconds?: number };
+  };
   provider: string;
   fields?: string[];
-  dependencies?: unknown[];
+  dependencies?: Dependency[];
   template: string;
   destination: { table: string; hnsw?: { m?: number; ef_construction?: number } };
 };
@@ -67,6 +79,7 @@ export function validateConfiguration(value: unknown): Configuration {
         'localembed.tasks_available',
         'localembed.tasks_key',
         'localembed.tasks_ready',
+        'localembed.polling_state',
       ].includes(entity.destination.table)
     ) {
       throw new Error(`${entity.name}: reserved destination`);
@@ -78,15 +91,25 @@ export function validateConfiguration(value: unknown): Configuration {
     if (entity.source.table.startsWith('localembed.')) {
       throw new Error(`${entity.name}: source must be outside localembed`);
     }
-    if (entity.source.detection.mode !== 'trigger' || entity.dependencies?.length) {
-      throw new Error(
-        `${entity.name}: only trigger mode without dependencies is supported by this command`,
-      );
+    const dependencies = new Set<string>();
+    for (const dep of entity.dependencies ?? []) {
+      if (dep.relation !== 'one') {
+        throw new Error(`${entity.name}: only many-to-one dependencies are supported`);
+      }
+      if (dependencies.has(dep.name)) {
+        throw new Error(`${entity.name}: duplicate dependency ${dep.name}`);
+      }
+      dependencies.add(dep.name);
+      if (dep.target.table.startsWith('localembed.') || dep.target.table === entity.source.table) {
+        throw new Error(`${entity.name}: dependency must be a distinct consumer table`);
+      }
     }
     for (const match of entity.template.matchAll(/\{\{([^}]+)\}\}/g)) {
-      if (!entity.fields?.includes(match[1])) {
-        throw new Error(`${entity.name}: template field ${match[1]} is not declared`);
-      }
+      const [name, field] = match[1].split('.');
+      const declared = field
+        ? entity.dependencies?.find((dep) => dep.name === name)?.fields.includes(field)
+        : entity.fields?.includes(name);
+      if (!declared) throw new Error(`${entity.name}: template field ${match[1]} is not declared`);
     }
     if ((entity.destination.hnsw?.ef_construction ?? 64) < 2 * (entity.destination.hnsw?.m ?? 16)) {
       throw new Error(`${entity.name}: HNSW ef_construction must be at least twice m`);
@@ -97,6 +120,16 @@ export function validateConfiguration(value: unknown): Configuration {
         ...entity.source.table.split('.'),
         entity.source.id.column,
         ...(entity.fields ?? []),
+        ...(entity.source.detection.updated_at ? [entity.source.detection.updated_at] : []),
+        ...(entity.dependencies ?? []).flatMap((
+          dep,
+        ) => [
+          dep.name,
+          dep.source_column,
+          ...dep.target.table.split('.'),
+          dep.target.id.column,
+          ...dep.fields,
+        ]),
         ...entity.destination.table.split('.'),
       ]
     ) {
@@ -164,9 +197,16 @@ export async function applyConfiguration(
       if (!extensions.length) {
         throw new Error('Install the vector extension before applying configuration');
       }
-      // Lock sources before catalog validation so concurrent DDL cannot invalidate it.
+      // Lock every consumer relation in a stable order before catalog validation.
+      const relations = new Set(
+        config.entities.flatMap((
+          entity,
+        ) => [entity.source.table, ...(entity.dependencies ?? []).map((dep) => dep.target.table)]),
+      );
+      for (const relation of [...relations].sort()) {
+        await tx.unsafe(`LOCK TABLE ${table(relation)} IN SHARE ROW EXCLUSIVE MODE`);
+      }
       for (const entity of config.entities) {
-        await tx.unsafe(`LOCK TABLE ${table(entity.source.table)} IN SHARE ROW EXCLUSIVE MODE`);
         const columns =
           await tx`SELECT a.attname, t.typname, a.attnotnull FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid WHERE a.attrelid = to_regclass(${
             table(entity.source.table)
@@ -191,6 +231,43 @@ export async function applyConfiguration(
             throw new Error(`${entity.name}: source field ${field} does not exist`);
           }
         }
+        if (entity.source.detection.mode === 'polling') {
+          const updated = columns.find((column) =>
+            column.attname === entity.source.detection.updated_at
+          );
+          if (!updated || updated.typname !== 'timestamptz' || !updated.attnotnull) {
+            throw new Error(`${entity.name}: polling updated_at must be non-null timestamptz`);
+          }
+        }
+        for (const dep of entity.dependencies ?? []) {
+          const foreign = columns.find((column) => column.attname === dep.source_column);
+          const expected =
+            { uuid: 'uuid', bigint: 'int8', text: 'text', ulid: 'text' }[dep.target.id.type];
+          const targetColumns =
+            await tx`SELECT a.attname, t.typname, a.attnotnull FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid WHERE a.attrelid = to_regclass(${
+              table(dep.target.table)
+            }) AND a.attnum > 0 AND NOT a.attisdropped`;
+          const key = targetColumns.find((column) => column.attname === dep.target.id.column);
+          const unique =
+            await tx`SELECT 1 FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0] WHERE i.indrelid = to_regclass(${
+              table(dep.target.table)
+            }) AND i.indisunique AND i.indisvalid AND i.indnkeyatts = 1 AND i.indpred IS NULL AND i.indexprs IS NULL AND a.attname = ${dep.target.id.column}`;
+          if (
+            !foreign || foreign.typname !== expected || !key || key.typname !== expected ||
+            !key.attnotnull || !unique.length
+          ) {
+            throw new Error(
+              `${entity.name}: dependency ${dep.name} requires a compatible source column and non-null unique target key`,
+            );
+          }
+          for (const field of dep.fields) {
+            if (!targetColumns.some((column) => column.attname === field)) {
+              throw new Error(
+                `${entity.name}: dependency field ${dep.name}.${field} does not exist`,
+              );
+            }
+          }
+        }
         const existing = await tx`SELECT to_regclass(${
           table(entity.destination.table)
         }) AS destination`;
@@ -204,6 +281,7 @@ export async function applyConfiguration(
         CREATE TABLE IF NOT EXISTS localembed.configurations (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration jsonb NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());
         CREATE TABLE IF NOT EXISTS localembed.backfills (configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, cursor text, complete boolean NOT NULL DEFAULT false, indexed boolean NOT NULL DEFAULT false, PRIMARY KEY(configuration_id, entity));`);
       await installTaskQueue(tx);
+      await installPollingState(tx);
       const [revision] = await tx`INSERT INTO localembed.configurations (configuration) VALUES (${
         tx.json(config as unknown as postgres.JSONValue)
       }) RETURNING id`;

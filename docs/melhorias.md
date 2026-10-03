@@ -1,7 +1,7 @@
 # Melhorias do LocalEmbed: registro para o artigo
 
-Este arquivo reúne decisões, evidências e limitações das issues #3, #11 e #4. É um registro técnico
-para apoiar a redação do artigo; as medições abaixo não constituem uma avaliação geral de
+Este arquivo reúne decisões, evidências e limitações das issues #3, #11, #4 e #5. É um registro
+técnico para apoiar a redação do artigo; as medições abaixo não constituem uma avaliação geral de
 desempenho.
 
 ## Geração e armazenamento de embeddings — issue #3
@@ -27,9 +27,9 @@ persistido; verificação de dimensão; armazenamento idempotente por identifica
 referência reproduzível.
 
 **Custos e limites:** cada alteração relevante ainda escreve na fila; o banco assume coordenação e
-armazenamento adicionais; a atualização de configurações, polling e dependências de conteúdo
-permanecem pendentes. O índice HNSW atual é construído de forma transacional e bloqueia escritas no
-destino durante a criação.
+armazenamento adicionais; a atualização de configurações permanece pendente. Polling e dependências
+diretas de conteúdo foram implementados na #5, descrita abaixo. O índice HNSW atual é construído de
+forma transacional e bloqueia escritas no destino durante a criação.
 
 ## Coordenação, redução de tarefas e leases — issue #11
 
@@ -130,6 +130,39 @@ compatível simulado. A verificação adicional com TEI real está documentada c
 não foi executada novamente para a #4. Nenhuma medição de latência ou qualidade foi feita para a
 API.
 
+## Polling e dependências de conteúdo — issue #5
+
+O LocalEmbed passou a aceitar detecção por polling, com cursor persistente formado por timestamp e
+identificador tipado, lotes limitados e preservação de microssegundos. Uma janela incremental com
+sobreposição acelera a detecção. A reconciliação completa percorre origens e destinos por chave para
+encontrar commits atrasados, mudanças atrás do cursor e embeddings órfãos após exclusões físicas.
+Cursor, fase e limites superiores da varredura ficam persistidos junto ao enfileiramento.
+
+Dependências diretas muitos-para-um são explícitas: uma coluna do Produto aponta para a chave única
+da Categoria, e o template pode usar `{{category.name}}`. Em trigger, mudanças relevantes na
+Categoria enfileiram os Produtos afetados. Em polling, a reconciliação detecta alterações na
+Categoria sem exigir mudança no timestamp do Produto. Antes de gravar, o worker verifica e bloqueia
+os dados de origem e de suas dependências por funções restritas, mantendo os papéis de runtime sem
+UPDATE nas tabelas da aplicação consumidora.
+
+**Benefícios:** funcionamento sem triggers de captura em modo polling; retomada após reinício;
+suporte a conteúdo relacionado; limpeza eventual de vetores órfãos; verificação de respostas antigas
+mesmo quando não houve captura transacional.
+
+**Custos e limites:** consultas periódicas, cálculo de fingerprints e varreduras completas aumentam
+a carga no banco. Exclusões físicas, commits muito atrasados e mudanças apenas nas dependências
+podem esperar a reconciliação; intervalo, duração da varredura e backlog influenciam o atraso. Um
+pai com muitos registros dependentes pode tornar sua transação cara no modo trigger. Locks finais
+podem disputar acesso com a aplicação. Não há suporte a coleções, dependências encadeadas ou
+autorrelações. Polling observa o estado atual e não reconstrói todos os estados intermediários.
+Tarefas com falha continuam exigindo tratamento na #6.
+
+Sete testes novos verificam cursores, retomada, precisão, commits atrasados, concorrência,
+exclusão/reinserção, fan-out, rollback e privilégios de runtime em ParadeDB com inferência simulada.
+O procedimento e a política de completude estão em
+[polling-dependencies.md](polling-dependencies.md). Não foram feitas medições de throughput,
+latência ou qualidade de recuperação para esta entrega.
+
 ## Melhorias pendentes e rastreabilidade
 
 - [#4](https://github.com/gkissel/local-embed/issues/4): API autenticada de geração de consulta, com
@@ -141,8 +174,6 @@ API.
   identificadores ou configurações.
 - [#13](https://github.com/gkissel/local-embed/issues/13): construção concorrente de HNSW, com
   acompanhamento de falhas e estado do índice.
-- [#5](https://github.com/gkissel/local-embed/issues/5): polling, reconciliação e dependências de
-  conteúdo.
 - [#7](https://github.com/gkissel/local-embed/issues/7): métricas que separem alterações capturadas,
   estados reunidos, inferências e eventos de lease. A contagem de linhas da fila reutilizável não
   representa histórico acumulado.
@@ -153,3 +184,11 @@ Para o artigo, separar três tipos de afirmação: propriedades asseguradas pela
 testes; contagens observadas no experimento controlado; hipóteses que ainda exigem avaliação.
 Avaliações futuras devem registrar conjunto de dados, recursos, concorrência, modelo e revisão,
 duração, latências, throughput, consumo do banco e qualidade da recuperação.
+
+As limitações da API também foram registradas em
+[#14](https://github.com/gkissel/local-embed/issues/14) (preparação e tokens),
+[#15](https://github.com/gkissel/local-embed/issues/15) (credenciais, quotas e concorrência),
+[#16](https://github.com/gkissel/local-embed/issues/16) (cache) e
+[#17](https://github.com/gkissel/local-embed/issues/17) (verificação da API com TEI real). Retries
+síncronos fazem parte da #6; implantação, métricas e avaliação foram complementadas nas #9, #7 e
+#10.
