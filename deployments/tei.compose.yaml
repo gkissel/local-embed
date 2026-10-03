@@ -1,0 +1,16 @@
+services:
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+    command:
+      - --model-id
+      - intfloat/multilingual-e5-base
+      - --revision
+      - 129286372ebbc09af0394786dd03e16427ade171
+      - --api-key
+      - ${LOCAL_EMBED_TEI_API_KEY:?Set LOCAL_EMBED_TEI_API_KEY}
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - tei-model:/data
+volumes:
+  tei-model:

@@ -1,0 +1,9 @@
+{
+  "name": "@localembed/worker",
+  "exports": "./worker.ts",
+  "imports": {
+    "ai": "npm:ai@5",
+    "@ai-sdk/openai": "npm:@ai-sdk/openai@2",
+    "postgres": "npm:postgres@3.4.7"
+  }
+}
