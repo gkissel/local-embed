@@ -188,3 +188,57 @@ queue state, and renewals add a write each interval. Queue retention, retry poli
 updates and concurrent HNSW construction remain issues #12, #6 and #13.
 
 See [the reproducible queue workload comparison](docs/queue-coordination.md).
+
+## Query embedding API
+
+Run the API with a separate, randomly generated service key. The API database role needs only
+`USAGE` on schema `localembed` and `SELECT` on `localembed.configurations`:
+
+```sh
+export DATABASE_URL=postgres://localembed_api:password@localhost/localembed
+export LOCAL_EMBED_SERVICE_KEY=$(openssl rand -hex 32)
+export LOCAL_EMBED_TEI_API_KEY=your-provider-key
+deno task api
+```
+
+The server binds to `127.0.0.1:8090` by default. Configure `LOCAL_EMBED_API_HOST` and
+`LOCAL_EMBED_API_PORT` for your deployment; use a TLS reverse proxy when accessed remotely. The
+service key is 32 random bytes encoded as 64 hexadecimal characters and is independent of the
+provider key. Send it as a Bearer credential:
+
+```sh
+curl http://127.0.0.1:8090/v1/embeddings \
+  -H "Authorization: Bearer $LOCAL_EMBED_SERVICE_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"entity":"article","input":"query: Como funciona a sincronização incremental?"}'
+```
+
+Only applied entities are available. For an entity, the API reads the latest applied configuration
+containing that entity, uses its provider and model, and returns `embedding`, `dimensions`, `model`,
+`provider` and generation metadata. It never searches, reads source rows, enqueues tasks or persists
+query text. The input is sent verbatim: include the reference E5 `query:` prefix yourself; source
+content uses the independent `passage:` entity template. The returned fingerprint combines query
+text and the entity's generation parameters; it does not identify a source row.
+
+Requests must have exactly `entity` and `input`, use JSON, contain 1–32768 Unicode characters of
+input, and fit within 262144 body bytes, including streamed bodies. Authentication happens before
+configuration access or inference. Invalid requests return 400, invalid credentials 401, unapplied
+entities 404, and configuration/provider failures 503 with sanitized errors. Provider vectors must
+have the configured dimension and finite numeric values. Inference has a 30-second timeout and
+observes request cancellation. There is no query cache, per-consumer quota, or automatic retry in
+this version; deployments sharing a service key share access to all applied entities.
+
+`deno task test` checks validation, authentication, metadata, invalid provider output and timeout.
+The API integration test runs with the other scenarios via `deno task test:integration`, exercising
+PostgreSQL configuration lookup through a role with read-only permissions and a local
+OpenAI-compatible provider. It uses a disposable database, recreates `localembed`, and creates and
+drops the temporary `localembed_query_test` role. To additionally verify real inference, use:
+
+```sh
+TEST_DATABASE_URL=postgres://postgres:password@localhost/test \
+TEST_TEI_ENDPOINT=http://localhost:8080 \
+LOCAL_EMBED_TEI_API_KEY=your-provider-key \
+deno test --allow-read --allow-env --allow-net tests/api_integration_test.ts
+```
+
+See [the implementation improvements and experimental limits](docs/melhorias.md) for article notes.

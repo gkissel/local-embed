@@ -1,0 +1,5 @@
+{
+  "name": "@localembed/api",
+  "exports": "./api.ts",
+  "imports": { "postgres": "npm:postgres@3.4.7" }
+}

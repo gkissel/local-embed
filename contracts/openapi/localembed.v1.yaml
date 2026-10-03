@@ -4,7 +4,8 @@ info:
   version: 1.0.0
   description: >-
     Public contract for generating one query embedding from an applied LocalEmbed
-    entity configuration. This API never performs search.
+    entity configuration. This API never performs search. JSON request bodies
+    are limited to 262144 bytes. Input is sent verbatim to the provider.
 servers:
   - url: https://api.localembed.dev
 paths:
@@ -44,7 +45,8 @@ components:
       type: http
       scheme: bearer
       bearerFormat: Service key
-      description: A 32-byte random key supplied through the runtime environment.
+      description: A 32-byte random key encoded as 64 hexadecimal characters and supplied
+        through the runtime environment.
   responses:
     ValidationError:
       description: Request did not match the public contract.
