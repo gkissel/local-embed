@@ -1,7 +1,8 @@
 # Melhorias do LocalEmbed: registro para o artigo
 
-Este arquivo reúne decisões, evidências e limitações das issues #3 e #11. É um registro técnico para
-apoiar a redação do artigo; as medições abaixo não constituem uma avaliação geral de desempenho.
+Este arquivo reúne decisões, evidências e limitações das issues #3, #11 e #4. É um registro técnico
+para apoiar a redação do artigo; as medições abaixo não constituem uma avaliação geral de
+desempenho.
 
 ## Geração e armazenamento de embeddings — issue #3
 
@@ -98,6 +99,36 @@ Armazenar o vetor na tabela de origem pode simplificar consultas e algumas opera
 mudanças no schema da aplicação consumidora. A decisão atual mantém destinos separados. A issue #8
 deve comparar as duas alternativas, registrar planos e medições e fundamentar qualquer revisão dessa
 decisão. Nenhuma superioridade de desempenho foi demonstrada até aqui.
+
+## Geração de consulta autenticada — issue #4
+
+A API `POST /v1/embeddings` recebe entidade e texto avulso, consulta a última configuração aplicada
+que contém essa entidade e devolve o vetor com modelo, provedor, dimensão e fingerprint de geração.
+A chave de serviço é independente da credencial do provedor. O papel de banco da API necessita
+apenas de leitura da configuração; não lê dados de origem e não modifica tarefas ou destinos.
+
+A implementação rejeita credenciais inválidas antes de consultar o banco ou fazer inferência, exige
+JSON sem propriedades adicionais e limita a entrada a 32768 caracteres Unicode e o corpo a 262144
+bytes. Valida a dimensão e os valores finitos do vetor, limita a espera pela inferência a 30
+segundos e devolve erros sanitizados. O texto é enviado sem transformação: para o modelo de
+referência, a aplicação consumidora inclui o prefixo `query:`. A API não executa busca nem persiste
+consultas.
+
+**Benefícios:** contrato estável para aplicações consumidoras, configuração de modelo centralizada e
+separação entre acesso à API e acesso ao provedor.
+
+**Custos e limites:** cada consulta aceita lê a configuração e chama o provedor; não há cache, quota
+por consumidor ou retry automático. A chave compartilhada permite acesso a todas as entidades
+aplicadas. O limite de caracteres não substitui o limite de tokens do modelo. O controle completo de
+ativação e substituição de versões ainda depende da #6. A qualidade da busca depende também do
+modelo, preparação do texto e consulta realizada pela aplicação consumidora.
+
+Três testes da API verificam autenticação, entradas inválidas, metadata, determinismo do
+fingerprint, vetores inválidos e timeout. Um teste de integração verifica a leitura da configuração
+por papel restrito, a seleção por entidade e versão e o protocolo do provedor com servidor
+compatível simulado. A verificação adicional com TEI real está documentada como opcional no README;
+não foi executada novamente para a #4. Nenhuma medição de latência ou qualidade foi feita para a
+API.
 
 ## Melhorias pendentes e rastreabilidade
 

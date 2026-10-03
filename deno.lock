@@ -626,6 +626,11 @@
           "npm:postgres@3.4.7"
         ]
       },
+      "services/api": {
+        "dependencies": [
+          "npm:postgres@3.4.7"
+        ]
+      },
       "services/worker": {
         "dependencies": [
           "npm:@ai-sdk/openai@2",
