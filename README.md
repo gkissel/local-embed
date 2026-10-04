@@ -294,3 +294,11 @@ read-only database role; capture counters persist independently of reusable task
 Existing installations must stop old runtimes, run `prepare-worker`, grant enqueue metrics
 permissions to source writers/pollers and restart with the new version. Telemetry export is opt-in
 through `OTEL_DENO=true`; use a unique `service.instance.id` for each process.
+
+## Consumer hybrid-search demonstration
+
+The [hybrid-search guide](docs/hybrid-search.md) runs a separate consumer that obtains query vectors
+from the API, combines ParadeDB BM25 and pgvector with weighted RRF, and checks applied generation
+and source fingerprints. `demo:setup`, `demo:search` and `demo:compare` provide setup, query and
+disposable storage-comparison tasks. The [recorded comparison](docs/evaluation/hybrid-storage.json)
+uses equivalent synthetic data; it does not change managed storage or claim real-model quality.

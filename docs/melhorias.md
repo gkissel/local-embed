@@ -1,6 +1,6 @@
 # Melhorias do LocalEmbed: registro para o artigo
 
-Este arquivo reúne decisões, evidências e limitações das issues #3, #11, #4, #5, #6 e #7. É um
+Este arquivo reúne decisões, evidências e limitações das issues #3, #11, #4, #5, #6, #7 e #8. É um
 registro técnico para apoiar a redação do artigo; as medições abaixo não constituem uma avaliação
 geral de desempenho.
 
@@ -98,8 +98,8 @@ exemplo com RRF, mesmo com destinos separados.
 
 Armazenar o vetor na tabela de origem pode simplificar consultas e algumas operações, mas introduz
 mudanças no schema da aplicação consumidora. A decisão atual mantém destinos separados. A issue #8
-deve comparar as duas alternativas, registrar planos e medições e fundamentar qualquer revisão dessa
-decisão. Nenhuma superioridade de desempenho foi demonstrada até aqui.
+registrou uma comparação inicial, com planos e medições descritos abaixo. Os resultados limitados
+não demonstram superioridade geral nem justificam revisão dessa decisão.
 
 ## Geração de consulta autenticada — issue #4
 
@@ -214,8 +214,6 @@ throughput, latência, custo dos locks ou qualidade semântica. Operação e per
   identificadores ou configurações.
 - [#13](https://github.com/gkissel/local-embed/issues/13): construção concorrente de HNSW, com
   acompanhamento de falhas e estado do índice.
-- [#8](https://github.com/gkissel/local-embed/issues/8): demonstração híbrida e comparação entre
-  vetor na origem e destino separado.
 
 Para o artigo, separar três tipos de afirmação: propriedades asseguradas pela implementação e
 testes; contagens observadas no experimento controlado; hipóteses que ainda exigem avaliação.
@@ -283,3 +281,55 @@ tarefas concluídas, zeros na fila e acesso somente de leitura; o teste de priva
 extras e credenciais. Smoke de exportação verificou métricas em Prometheus, logs em Loki, trace em
 Tempo e provisionamento dos painéis; inferência foi simulada. Não houve benchmark de throughput,
 custo dos contadores ou qualidade semântica. Operação e reprodução em [telemetry.md](telemetry.md).
+
+## Mitigações da telemetria planejadas
+
+- #26: contadores persistentes configuráveis e snapshots adaptativos; desativar contadores sacrifica
+  histórico acumulado. Agregação assíncrona/contadores incrementais só depois das medições da #10.
+- #10: medir escrita adicional, disputas, EXPLAIN das consultas, frequência, amostragem e perdas.
+- #9: exportação no desligamento, fila persistente no Collector, amostragem, recursos e
+  TLS/auth/rede. A fila protege eventos já recebidos pelo Collector, não eventos ainda no processo
+  que caiu.
+- #12: retenção dos backends e classificação de eventos críticos; auditoria/contadores de banco já
+  são duráveis. Outbox transacional apenas se houver lacunas críticas de recuperação/auditoria.
+
+Estas mitigações estão planejadas. Não há garantia de ausência de perdas ou overhead zero.
+
+## Busca híbrida na aplicação demonstradora — issue #8
+
+**O que foi feito:** a aplicação consumidora usa a API para gerar o vetor de consulta e combina
+BM25/pg_search com pgvector por RRF ponderado. Os dois ramos aplicam tenant/publicação, desempate
+numérico por identificador e limites declarados. A revisão é resolvida no snapshot da consulta;
+vetores incompatíveis provocam nova geração limitada. Uma consulta já iniciada pode concluir na
+revisão anterior retida. Fingerprints excluem embeddings desatualizados mesmo após limpeza da fila.
+
+**Pontos positivos:** busca e ranking continuam pertencendo à aplicação consumidora; o LocalEmbed
+não recebe API de busca. O consumidor usa acesso somente de leitura. A fusão não precisa normalizar
+escores BM25 e distância. Existe comparação reproduzível com vetores na mesma tabela, planos e
+resultados equivalentes para o modo exato, sem alterar o ADR-0007.
+
+**Pontos negativos:** verificar fingerprints acrescenta leituras/cálculo por candidato. O pool
+limitado pode produzir menos candidatos semânticos quando há muitos vetores desatualizados; HNSW é
+aproximado e filtros podem mudar o plano/recall. Ativações podem repetir inferência de consulta, e
+leitores exigem retenção/grace de destinos antigos. Filtros SQL dependem de um tenant derivado de
+autorização real pela aplicação; esta CLI é uma demonstração para operador confiável.
+
+**Medições:** 512 registros, vetores densos determinísticos de três dimensões, 5 warmups e 30
+amostras pareadas em ordem alternada. Índices BM25 foram reconstruídos após a carga em ambos os
+layouts. p50/p95: separado 4,72/5,52 ms; mesma tabela 4,60/6,20 ms. Isso inclui consulta, checagem
+de fingerprint e fusão, mas exclui HTTP/inferência. A pequena diferença não sustenta uma conclusão
+geral sobre armazenamento, sobretudo para E5 de 768 dimensões. O histórico inicialmente desigual dos
+índices foi um viés identificado e corrigido antes dessas medições.
+
+**Contenção e migração:** a escrita isolada no destino não bloqueou a origem; o protocolo real do
+worker com lock de origem bloqueou, assim como escrever vetor na mesma linha. O probe DDL criou um
+destino vazio de quatro dimensões em 1,28 ms; alterar a coluna da tabela experimental em 11,66 ms
+tomou lock exclusivo e reconstruiu índices. São operações de escopos diferentes, sem
+backfill/ativação; não são tempos de migração completa. Um trigger experimental protegido ignorou a
+escrita de vetor e capturou a de conteúdo, ilustrando a prevenção de ciclos de reprocessamento.
+
+**Evidências e limites:** cinco testes de integração cobrem BM25/pgvector reais, API HTTP com
+inferência simulada, filtros, configuração concorrente, snapshot retido, freshness, layouts e
+permissões. A execução com TEI real continua na #17; avaliação geral/qualidade permanece na #10.
+Operação em [hybrid-search.md](hybrid-search.md); dados/planos completos em
+[evaluation/hybrid-storage.json](evaluation/hybrid-storage.json).
