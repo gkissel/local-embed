@@ -192,3 +192,12 @@ As limitações da API também foram registradas em
 [#17](https://github.com/gkissel/local-embed/issues/17) (verificação da API com TEI real). Retries
 síncronos fazem parte da #6; implantação, métricas e avaliação foram complementadas nas #9, #7 e
 #10.
+
+As mitigações de polling e dependências foram registradas em
+[#18](https://github.com/gkissel/local-embed/issues/18) (leituras em lote e intervalo adaptativo),
+[#19](https://github.com/gkissel/local-embed/issues/19) (cursores de dependências e tombstones),
+[#20](https://github.com/gkissel/local-embed/issues/20) (invalidação com expansão assíncrona),
+[#21](https://github.com/gkissel/local-embed/issues/21) (coleções e caminhos explícitos) e
+[#22](https://github.com/gkissel/local-embed/issues/22) (avaliação de CDC). Falhas e reprocessamento
+permanecem na #6; as medições de custo e atraso foram acrescentadas à #10. Estes itens estão
+planejados, não implementados.
