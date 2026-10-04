@@ -1,0 +1,10 @@
+# Use with compose.yaml, a verified LOCAL_EMBED_TEI_IMAGE GPU digest and NVIDIA container toolkit.
+services:
+  tei:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

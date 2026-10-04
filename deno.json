@@ -14,7 +14,7 @@
     "@opentelemetry/api": "npm:@opentelemetry/api@1.9.0"
   },
   "tasks": {
-    "check": "deno fmt --check deno.json mod.ts README.md contracts services scripts examples docs/site tests && deno lint services scripts examples docs/site tests && deno check scripts/prepare_docs.ts scripts/validate_contracts.ts docs/site/_config.ts tests/contracts_test.ts services/admin/main.ts services/worker/main.ts scripts/measure_queue.ts services/api/main.ts services/poller/main.ts services/telemetry/main.ts scripts/verify_telemetry.ts examples/hybrid-search/main.ts examples/hybrid-search/setup.ts scripts/compare_hybrid_storage.ts",
+    "check": "deno fmt --check deno.json mod.ts README.md contracts services scripts examples deployments/runtime docs/site tests && deno lint services scripts examples deployments/runtime docs/site tests && deno check scripts/prepare_docs.ts scripts/validate_contracts.ts docs/site/_config.ts tests/contracts_test.ts services/admin/main.ts services/worker/main.ts scripts/measure_queue.ts services/api/main.ts services/poller/main.ts services/telemetry/main.ts scripts/verify_telemetry.ts examples/hybrid-search/main.ts examples/hybrid-search/setup.ts scripts/compare_hybrid_storage.ts deployments/runtime/bootstrap.ts deployments/runtime/probe.ts scripts/deployment/smoke.ts",
     "validate:contracts": "deno run --allow-read --allow-net --allow-env scripts/validate_contracts.ts",
     "docs:prepare": "deno run --allow-read --allow-write scripts/prepare_docs.ts",
     "docs:build": "deno task docs:prepare && deno task --cwd docs/site build",
@@ -29,6 +29,8 @@
     "verify:telemetry": "deno run --allow-read --allow-env --allow-net scripts/verify_telemetry.ts",
     "demo:setup": "deno run --allow-read --allow-env --allow-net examples/hybrid-search/setup.ts",
     "demo:search": "deno run --allow-env --allow-net examples/hybrid-search/main.ts",
+    "verify:deployment": "scripts/deployment/verify-packaging.sh",
+    "verify:deployment:tei": "deno run --allow-read=deployments/.secrets/service_key --allow-env --allow-net scripts/deployment/smoke.ts",
     "demo:compare": "deno run --allow-read --allow-write --allow-env --allow-net scripts/compare_hybrid_storage.ts"
   },
   "fmt": {

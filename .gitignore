@@ -6,3 +6,6 @@ node_modules/
 _site/
 docs/site/_site/
 docs/site/contracts/
+
+# Local reference deployment credentials
+deployments/.secrets/

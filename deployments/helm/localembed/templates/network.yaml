@@ -1,0 +1,75 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-isolation
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}}
+  policyTypes: [Ingress, Egress]
+  # Ingress is opened by destination/role below; egress is limited to this release,
+  # cluster DNS and explicit managed-service CIDRs. Requires a policy-capable CNI.
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}}
+      ports: [{protocol: TCP, port: 5432}, {protocol: TCP, port: 80}, {protocol: TCP, port: 4318}]
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    {{- with .Values.networkPolicy.externalEgress }}
+    {{ toYaml . | nindent 4 }}
+    {{- end }}
+{{- $root := . }}
+{{- range $role, $sources := dict "database" (list "bootstrap" "worker" "api" "poller" "snapshot") "tei" (list "bootstrap" "worker" "api") "dashboard" (list "worker" "api" "poller" "snapshot") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $root.Release.Name }}-{{ $role }}-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/instance: {{ $root.Release.Name }}, role: {{ $role }}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range $source := $sources }}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/instance: {{ $root.Release.Name }}, role: {{ $source }}}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: {{ if eq $role "database" }}5432{{ else if eq $role "tei" }}80{{ else }}4318{{ end }}}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-api-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: api}
+  policyTypes: [Ingress]
+  ingress:
+    {{- if .Values.networkPolicy.apiClients }}
+    - from: {{ toYaml .Values.networkPolicy.apiClients | nindent 8 }}
+      ports: [{protocol: TCP, port: 8090}]
+    {{- else }}
+    []
+    {{- end }}
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.inference.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-model-download
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: tei}
+  policyTypes: [Egress]
+  egress:
+    # Hugging Face model/CDN download; TEI never receives source database credentials.
+    - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
+      ports: [{protocol: TCP, port: 443}]
+{{- end }}

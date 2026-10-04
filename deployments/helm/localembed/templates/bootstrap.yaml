@@ -1,0 +1,50 @@
+{{- if .Values.bootstrap.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-bootstrap
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ .Values.bootstrap.deadlineSeconds }}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: bootstrap}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      initContainers:
+        - name: wait-for-dependencies
+          image: {{ .Values.image | quote }}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: 100m, memory: 128Mi}}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              until deno eval --cached-only 'import postgres from "npm:postgres@3.4.7"; const s=postgres(await Deno.readTextFile("/run/secrets/admin_url"),{max:1,connect_timeout:3}); await s`SELECT 1`; await s.end(); const r=await fetch(Deno.env.get("TEI_ENDPOINT")+"/health",{signal:AbortSignal.timeout(3000)}); if(!r.ok) throw Error("not ready");' >/dev/null 2>&1; do sleep 5; done
+          env: [{name: TEI_ENDPOINT, value: {{ (default (printf "http://%s-tei:80" .Release.Name) .Values.inference.endpoint) | quote }}}]
+          volumeMounts: [{name: credentials, mountPath: /run/secrets, readOnly: true}]
+      containers:
+        - name: bootstrap
+          image: {{ .Values.image | quote }}
+          args: [bootstrap]
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          env:
+            - {name: DATABASE_URL_FILE, value: /run/secrets/admin_url}
+            - {name: LOCAL_EMBED_TEI_API_KEY_FILE, value: /run/secrets/tei_key}
+            - {name: LOCAL_EMBED_TEI_ENDPOINT, value: {{ (default (printf "http://%s-tei:80" .Release.Name) .Values.inference.endpoint) | quote }}}
+          volumeMounts:
+            - {name: credentials, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ .Values.adminSecretName }}
+            items: [{key: admin_url, path: admin_url}, {key: tei_key, path: tei_key}]
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}

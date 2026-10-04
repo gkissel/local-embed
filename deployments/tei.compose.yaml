@@ -1,6 +1,8 @@
 services:
   tei:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+    # The pinned router logs its API key at INFO during startup.
+    environment: {LOG_LEVEL: WARN}
     command:
       - --model-id
       - intfloat/multilingual-e5-base

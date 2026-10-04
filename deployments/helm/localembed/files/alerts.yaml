@@ -1,0 +1,43 @@
+groups:
+  - name: localembed-export
+    interval: 15s
+    rules:
+      - alert: LocalEmbedSnapshotStale
+        expr: localembed_snapshot_age_seconds > 60 or absent(localembed_snapshot_age_seconds)
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "Database snapshot is stale or missing; check snapshot process and OTLP path"}
+      - alert: LocalEmbedCollectorUnavailable
+        expr: up{job="localembed-collector"} == 0 or absent(up{job="localembed-collector"})
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: "Collector self-monitoring unavailable"}
+      - alert: LocalEmbedTelemetryQueueHigh
+        expr: otelcol_exporter_queue_size / otelcol_exporter_queue_capacity > 0.8
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "Persistent telemetry queue above 80%; check backend and disk"}
+      - alert: LocalEmbedTelemetryRejected
+        expr: increase(otelcol_exporter_enqueue_failed_log_records_total[5m]) > 0 or increase(otelcol_exporter_enqueue_failed_spans_total[5m]) > 0 or increase(otelcol_exporter_enqueue_failed_metric_points_total[5m]) > 0
+        labels: {severity: warning}
+        annotations: {summary: "Collector could not persist telemetry; application buffers may also lose events"}
+      - alert: LocalEmbedWorkerExportStale
+        expr: time() - timestamp(localembed_process_memory_bytes{service_name="localembed-worker"}) > 60 or absent(localembed_process_memory_bytes{service_name="localembed-worker"})
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "worker metrics export stale or missing"}
+      - alert: LocalEmbedQueryapiExportStale
+        expr: time() - timestamp(localembed_process_memory_bytes{service_name="localembed-query-api"}) > 60 or absent(localembed_process_memory_bytes{service_name="localembed-query-api"})
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "query-api metrics export stale or missing"}
+      - alert: LocalEmbedPollerExportStale
+        expr: time() - timestamp(localembed_process_memory_bytes{service_name="localembed-poller"}) > 60 or absent(localembed_process_memory_bytes{service_name="localembed-poller"})
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "poller metrics export stale or missing"}
+      - alert: LocalEmbedTelemetryExportStale
+        expr: time() - timestamp(localembed_process_memory_bytes{service_name="localembed-telemetry"}) > 60 or absent(localembed_process_memory_bytes{service_name="localembed-telemetry"})
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "telemetry metrics export stale or missing"}

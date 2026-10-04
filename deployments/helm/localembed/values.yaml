@@ -1,0 +1,73 @@
+# Pre-create secrets; this chart never renders credentials into manifests.
+image: localembed:0.1.0
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+production: false
+secretName: localembed-runtime
+# Separate secret used ONLY by the bootstrap job and database initialization.
+adminSecretName: localembed-admin
+bootstrap:
+  enabled: true
+  deadlineSeconds: 1800
+terminationGracePeriodSeconds: 45
+telemetry:
+  enabled: true
+  endpoint: "" # Defaults to this release dashboard
+  # Optional runtime-secret key containing Authorization=... for an external collector.
+  headersSecretKey: ""
+  metricIntervalMs: 15000
+  traceSampleRatio: "0.1"
+worker:
+  replicas: 1
+  resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+  env: {LOCAL_EMBED_LEASE_SECONDS: "60", LOCAL_EMBED_RENEW_EVERY_MS: "20000", LOCAL_EMBED_MAX_EXECUTION_MS: "300000"}
+api:
+  replicas: 1
+  resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+  env: {LOCAL_EMBED_API_HOST: "0.0.0.0"}
+poller:
+  replicas: 1
+  resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+  env: {LOCAL_EMBED_POLL_INTERVAL_MS: "1000"}
+snapshot:
+  # Exactly one exporter per database; Recreate avoids duplicate snapshot series.
+  resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: "0.5", memory: 256Mi}}
+  env: {LOCAL_EMBED_SNAPSHOT_INTERVAL_MS: "15000"}
+database:
+  enabled: true
+  image: paradedb/paradedb:0.22.6-pg18@sha256:2359a3628682f2dfc4ee65ed59f6a993d7851ed3d820b0c030c397ff7168b620
+  storage: 10Gi
+  storageClass: ""
+  resources: {requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
+inference:
+  enabled: true
+  endpoint: "" # Defaults to this release inference
+  image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+  replicas: 1
+  storage: 5Gi
+  storageClass: ""
+  model: intfloat/multilingual-e5-base
+  revision: 129286372ebbc09af0394786dd03e16427ade171
+  concurrency: 32
+  resources: {requests: {cpu: "1", memory: 1Gi}, limits: {cpu: "4", memory: 4Gi}}
+  nodeSelector: {}
+  tolerations: []
+  # For a compatible GPU TEI image add limits.nvidia.com/gpu: 1 and node selectors.
+dashboard:
+  # Development bundle only. Production must use isolated external backends.
+  enabled: true
+  image: grafana/otel-lgtm:0.35.0@sha256:2de1094c593c671cbfca878a28ffcd7e46ff5e32f2ce966c0cf33003f6cf4266
+  storage: 5Gi
+  storageClass: ""
+  resources: {requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
+networkPolicy:
+  enabled: true
+  # Namespace/pod selectors for a trusted API gateway (TLS/auth terminated there).
+  apiClients: []
+  # Explicit production egress to managed DB/inference/OTLP endpoints, e.g. CIDR port 443.
+  externalEgress: []
+administration:
+  enabled: false
+  deadlineSeconds: 1800
+  args: [admin, prepare-worker]
+  configurationConfigMap: ""

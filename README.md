@@ -302,3 +302,11 @@ from the API, combines ParadeDB BM25 and pgvector with weighted RRF, and checks 
 and source fingerprints. `demo:setup`, `demo:search` and `demo:compare` provide setup, query and
 disposable storage-comparison tasks. The [recorded comparison](docs/evaluation/hybrid-storage.json)
 uses equivalent synthetic data; it does not change managed storage or claim real-model quality.
+
+## Reference deployment
+
+Run `scripts/deployment/prepare.sh` and `docker compose -f deployments/compose.yaml up -d --build`
+for the pinned ParadeDB, LocalEmbed roles, TEI and telemetry environment. The same role image runs
+through [the Helm chart](deployments/helm/localembed). See
+[deployment operation and verification](docs/deployment.md) for credentials, administration, custom
+configuration, production boundaries and real-provider checks.

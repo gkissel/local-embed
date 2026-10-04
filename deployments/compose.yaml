@@ -1,0 +1,207 @@
+name: localembed
+x-runtime: &runtime
+  image: ${LOCAL_EMBED_IMAGE:-localembed:0.1.0}
+  build:
+    context: ..
+    dockerfile: deployments/runtime/Dockerfile
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp:size=64m]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 45s
+  mem_limit: 512m
+  cpus: 1
+  depends_on:
+    bootstrap: {condition: service_completed_successfully}
+  healthcheck:
+    test: [CMD, /app/deployments/runtime/entrypoint.sh, probe]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 15s
+x-telemetry: &telemetry
+  OTEL_DENO: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://dashboard:4318
+  OTEL_METRIC_EXPORT_INTERVAL: "15000"
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: "0.1"
+x-provider: &provider
+  LOCAL_EMBED_TEI_API_KEY_FILE: /run/secrets/tei_key
+services:
+  database:
+    image: paradedb/paradedb:0.22.6-pg18@sha256:2359a3628682f2dfc4ee65ed59f6a993d7851ed3d820b0c030c397ff7168b620
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: localembed
+    secrets: [postgres_password, admin_password, worker_password, poller_password, api_password, snapshot_password, consumer_password]
+    volumes:
+      - database-data:/var/lib/postgresql
+      - ./runtime/init-database.sh:/docker-entrypoint-initdb.d/10-localembed.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d localembed]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    mem_limit: 2g
+    cpus: 2
+    stop_grace_period: 60s
+  tei:
+    image: ${LOCAL_EMBED_TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c}
+    environment: {LOG_LEVEL: WARN}
+    # API_KEY is supported by the pinned router. Read only the provider secret.
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - 'export API_KEY=$$(cat /run/secrets/tei_key); exec text-embeddings-router --model-id intfloat/multilingual-e5-base --revision 129286372ebbc09af0394786dd03e16427ade171 --max-concurrent-requests ${LOCAL_EMBED_TEI_CONCURRENCY:-32}'
+    secrets: [tei_key]
+    volumes: [tei-model:/data]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:80/health]
+      interval: 10s
+      timeout: 5s
+      retries: 120
+    mem_limit: ${LOCAL_EMBED_TEI_MEMORY:-4g}
+    cpus: ${LOCAL_EMBED_TEI_CPUS:-4}
+    stop_grace_period: 45s
+  dashboard:
+    image: grafana/otel-lgtm:0.35.0@sha256:2de1094c593c671cbfca878a28ffcd7e46ff5e32f2ce966c0cf33003f6cf4266
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /otel-lgtm/grafana/conf/provisioning/dashboards/localembed/localembed.json
+    entrypoint: [/bin/bash, -ec]
+    command: ['export GF_SECURITY_ADMIN_PASSWORD=$$(cat /run/secrets/grafana_password); exec /otel-lgtm/run-all.sh']
+    secrets: [grafana_password]
+    ports: ["127.0.0.1:${LOCAL_EMBED_GRAFANA_PORT:-3000}:3000"]
+    volumes:
+      - telemetry-data:/data
+      - ./telemetry/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+      - ./telemetry/alerts.yaml:/otel-lgtm/localembed-alerts.yaml:ro
+      - ./telemetry/collector.yaml:/otel-lgtm/otelcol-config.yaml:ro
+      - ./telemetry/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/localembed.yaml:ro
+      - ./telemetry/localembed.json:/otel-lgtm/grafana/conf/provisioning/dashboards/localembed/localembed.json:ro
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:3000/api/health]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    mem_limit: 2g
+    cpus: 2
+    stop_grace_period: 45s
+  bootstrap:
+    <<: *runtime
+    command: [bootstrap]
+    restart: "no"
+    healthcheck: {disable: true}
+    depends_on:
+      database: {condition: service_healthy}
+      tei: {condition: service_healthy}
+    environment:
+      DATABASE_URL_FILE: /run/secrets/admin_url
+      <<: *provider
+      LOCAL_EMBED_TEI_ENDPOINT: http://tei:80
+    secrets: [admin_url, tei_key]
+  worker:
+    <<: *runtime
+    command: [worker]
+    environment:
+      <<: [*telemetry, *provider]
+      DATABASE_URL_FILE: /run/secrets/worker_url
+      OTEL_SERVICE_NAME: localembed-worker
+      LOCAL_EMBED_LEASE_SECONDS: "60"
+      LOCAL_EMBED_RENEW_EVERY_MS: "20000"
+      LOCAL_EMBED_MAX_EXECUTION_MS: "300000"
+    secrets: [worker_url, tei_key]
+  api:
+    <<: *runtime
+    command: [api]
+    environment:
+      <<: [*telemetry, *provider]
+      DATABASE_URL_FILE: /run/secrets/api_url
+      LOCAL_EMBED_SERVICE_KEY_FILE: /run/secrets/service_key
+      LOCAL_EMBED_API_HOST: 0.0.0.0
+      OTEL_SERVICE_NAME: localembed-query-api
+    secrets: [api_url, tei_key, service_key]
+    ports: ["127.0.0.1:${LOCAL_EMBED_API_PORT:-8090}:8090"]
+    healthcheck:
+      test: [CMD, /app/deployments/runtime/entrypoint.sh, probe, api]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  poller:
+    <<: *runtime
+    command: [poller]
+    environment:
+      <<: *telemetry
+      DATABASE_URL_FILE: /run/secrets/poller_url
+      OTEL_SERVICE_NAME: localembed-poller
+      LOCAL_EMBED_POLL_INTERVAL_MS: "1000"
+    secrets: [poller_url]
+  snapshot:
+    <<: *runtime
+    command: [telemetry]
+    environment:
+      <<: *telemetry
+      DATABASE_URL_FILE: /run/secrets/snapshot_url
+      OTEL_SERVICE_NAME: localembed-telemetry
+      LOCAL_EMBED_SNAPSHOT_INTERVAL_MS: "15000"
+    secrets: [snapshot_url]
+  admin:
+    <<: *runtime
+    profiles: [tools]
+    command: [admin, build-indexes]
+    restart: "no"
+    healthcheck: {disable: true}
+    environment:
+      DATABASE_URL_FILE: /run/secrets/admin_url
+      <<: *provider
+    secrets: [admin_url, tei_key]
+  demo:
+    <<: *runtime
+    profiles: [tools]
+    command: [demo, keyboard]
+    restart: "no"
+    healthcheck: {disable: true}
+    environment:
+      DEMO_DATABASE_URL: ${DEMO_DATABASE_URL:-}
+      DATABASE_URL_FILE: /run/secrets/consumer_url
+      LOCAL_EMBED_SERVICE_KEY_FILE: /run/secrets/service_key
+      LOCAL_EMBED_API_ENDPOINT: http://api:8090
+      DEMO_TENANT: ${DEMO_TENANT:-alpha}
+    secrets: [consumer_url, service_key]
+volumes:
+  database-data:
+  tei-model:
+  telemetry-data:
+secrets:
+  postgres_password:
+    file: ./.secrets/postgres_password
+  tei_key:
+    file: ./.secrets/tei_key
+  service_key:
+    file: ./.secrets/service_key
+  grafana_password:
+    file: ./.secrets/grafana_password
+  admin_password:
+    file: ./.secrets/admin_password
+  admin_url:
+    file: ./.secrets/admin_url
+  worker_password:
+    file: ./.secrets/worker_password
+  worker_url:
+    file: ./.secrets/worker_url
+  poller_password:
+    file: ./.secrets/poller_password
+  poller_url:
+    file: ./.secrets/poller_url
+  api_password:
+    file: ./.secrets/api_password
+  api_url:
+    file: ./.secrets/api_url
+  snapshot_password:
+    file: ./.secrets/snapshot_password
+  snapshot_url:
+    file: ./.secrets/snapshot_url
+  consumer_password:
+    file: ./.secrets/consumer_password
+  consumer_url:
+    file: ./.secrets/consumer_url
