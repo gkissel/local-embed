@@ -1,0 +1,115 @@
+{{- $root := . }}
+{{- range $role := list "worker" "api" "poller" "snapshot" }}
+{{- $options := index $root.Values $role }}
+{{- $command := $role }}
+{{- $serviceName := $role }}
+{{- if eq $role "api" }}{{ $serviceName = "query-api" }}{{ end }}
+{{- if eq $role "snapshot" }}{{ $serviceName = "telemetry" }}{{ end }}
+{{- if eq $role "snapshot" }}{{ $command = "telemetry" }}{{ end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $root.Release.Name }}-{{ $role }}
+spec:
+  replicas: {{ if eq $role "snapshot" }}1{{ else }}{{ $options.replicas }}{{ end }}
+  {{- if eq $role "snapshot" }}
+  strategy: {type: Recreate}
+  {{- end }}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ $root.Release.Name }}, role: {{ $role }}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ $root.Release.Name }}, role: {{ $role }}}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      initContainers:
+        - name: wait-for-administration
+          image: {{ $root.Values.image | quote }}
+          command: [/bin/sh, -ec]
+          args: ["until /app/deployments/runtime/entrypoint.sh probe >/dev/null 2>&1; do sleep 5; done"]
+          env: [{name: DATABASE_URL_FILE, value: /run/secrets/database_url}]
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: 100m, memory: 128Mi}}
+          volumeMounts:
+            - {name: credentials, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: {{ $role }}
+          image: {{ $root.Values.image | quote }}
+          imagePullPolicy: {{ $root.Values.imagePullPolicy }}
+          args: [{{ $command }}]
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {{ toYaml $options.resources | nindent 12 }}
+          env:
+            - name: DATABASE_URL_FILE
+              value: /run/secrets/database_url
+            - name: OTEL_DENO
+              value: {{ $root.Values.telemetry.enabled | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: localembed-{{ $serviceName }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ (default (printf "http://%s-dashboard:4318" $root.Release.Name) $root.Values.telemetry.endpoint) | quote }}
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: {{ $root.Values.telemetry.metricIntervalMs | quote }}
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_traceidratio
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ $root.Values.telemetry.traceSampleRatio | quote }}
+            {{- if $root.Values.telemetry.headersSecretKey }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef: {name: {{ $root.Values.secretName }}, key: {{ $root.Values.telemetry.headersSecretKey }}}
+            {{- end }}
+            {{- if or (eq $role "worker") (eq $role "api") }}
+            - name: LOCAL_EMBED_TEI_API_KEY_FILE
+              value: /run/secrets/tei_key
+            {{- end }}
+            {{- if eq $role "api" }}
+            - name: LOCAL_EMBED_SERVICE_KEY_FILE
+              value: /run/secrets/service_key
+            {{- end }}
+            {{- range $key, $value := $options.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          readinessProbe:
+            exec:
+              command: [/app/deployments/runtime/entrypoint.sh, probe{{ if eq $role "api" }}, api{{ end }}]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+          livenessProbe:
+            exec: {command: [/bin/sh, -c, "kill -0 1"]}
+            periodSeconds: 30
+          volumeMounts:
+            - {name: credentials, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ $root.Values.secretName }}
+            items:
+              - {key: {{ $role }}_url, path: database_url}
+              {{- if or (eq $role "worker") (eq $role "api") }}
+              - {key: tei_key, path: tei_key}
+              {{- end }}
+              {{- if eq $role "api" }}
+              - {key: service_key, path: service_key}
+              {{- end }}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-api
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, role: api}
+  ports: [{name: http, port: 8090, targetPort: 8090}]

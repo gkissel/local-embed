@@ -1,0 +1,45 @@
+{{- if .Values.administration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-admin
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.administration.deadlineSeconds }}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: bootstrap}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: admin
+          image: {{ .Values.image | quote }}
+          args: {{ toYaml .Values.administration.args | nindent 12 }}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          env:
+            - {name: DATABASE_URL_FILE, value: /run/secrets/admin_url}
+            - {name: LOCAL_EMBED_TEI_API_KEY_FILE, value: /run/secrets/tei_key}
+          volumeMounts:
+            - {name: credentials, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            {{- if .Values.administration.configurationConfigMap }}
+            - {name: configuration, mountPath: /app/deployments/operator, readOnly: true}
+            {{- end }}
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ .Values.adminSecretName }}
+            items: [{key: admin_url, path: admin_url}, {key: tei_key, path: tei_key}]
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        {{- if .Values.administration.configurationConfigMap }}
+        - name: configuration
+          configMap: {name: {{ .Values.administration.configurationConfigMap }}}
+        {{- end }}
+{{- end }}

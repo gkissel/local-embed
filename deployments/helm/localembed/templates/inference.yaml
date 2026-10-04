@@ -1,0 +1,58 @@
+{{- if .Values.inference.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-tei
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, role: tei}
+  ports: [{name: http, port: 80, targetPort: 80}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-tei
+spec:
+  serviceName: {{ .Release.Name }}-tei
+  replicas: {{ .Values.inference.replicas }}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: tei}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: tei}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.inference.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.inference.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: tei
+          image: {{ .Values.inference.image | quote }}
+          resources: {{ toYaml .Values.inference.resources | nindent 12 }}
+          args: ["--model-id", {{ .Values.inference.model | quote }}, "--revision", {{ .Values.inference.revision | quote }}, "--max-concurrent-requests", {{ .Values.inference.concurrency | quote }}]
+          env:
+            - {name: LOG_LEVEL, value: WARN}
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secretName }}, key: tei_key}
+          ports: [{containerPort: 80}]
+          readinessProbe:
+            httpGet: {path: /health, port: 80}
+            periodSeconds: 10
+          startupProbe:
+            httpGet: {path: /health, port: 80}
+            periodSeconds: 10
+            failureThreshold: 120
+          volumeMounts: [{name: data, mountPath: /data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.inference.storageClass }}
+        storageClassName: {{ .Values.inference.storageClass | quote }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.inference.storage }}}}
+{{- end }}

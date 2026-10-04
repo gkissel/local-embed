@@ -11,6 +11,8 @@ services:
       - "127.0.0.1:${LOCAL_EMBED_OTLP_PORT:-4318}:4318"
     volumes:
       - telemetry-data:/data
+      - ./telemetry/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+      - ./telemetry/alerts.yaml:/otel-lgtm/localembed-alerts.yaml:ro
       - ./telemetry/collector.yaml:/otel-lgtm/otelcol-config.yaml:ro
       - ./telemetry/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/localembed.yaml:ro
       - ./telemetry/localembed.json:/otel-lgtm/grafana/conf/provisioning/dashboards/localembed/localembed.json:ro

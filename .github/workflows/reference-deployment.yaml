@@ -1,0 +1,28 @@
+name: Reference deployment (real TEI)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+        with:
+          deno-version: v2.9.7
+      - name: Install pinned Helm
+        run: |
+          curl -fsSL https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz -o /tmp/helm-v3.19.0-linux-amd64.tar.gz
+          curl -fsSL https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz.sha256sum -o /tmp/helm.tar.gz.sha256sum
+          (cd /tmp && sha256sum --check helm.tar.gz.sha256sum)
+          tar -xzf /tmp/helm-v3.19.0-linux-amd64.tar.gz -C /tmp
+          sudo install /tmp/linux-amd64/helm /usr/local/bin/helm
+      - name: Check contracts and code
+        run: deno task check && deno task test
+      - name: Verify real reference stack and telemetry failure modes
+        run: scripts/deployment/verify-reference.sh
+      - name: Stop reference stack
+        if: always()
+        run: docker compose -f deployments/compose.yaml down

@@ -1,0 +1,60 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-dashboard
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, role: dashboard}
+  ports:
+    - {name: grafana, port: 3000, targetPort: 3000}
+    - {name: otlp, port: 4318, targetPort: 4318}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-dashboard
+spec:
+  serviceName: {{ .Release.Name }}-dashboard
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: dashboard}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: dashboard}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: dashboard
+          image: {{ .Values.dashboard.image | quote }}
+          resources: {{ toYaml .Values.dashboard.resources | nindent 12 }}
+          env:
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "false"}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secretName }}, key: grafana_password}
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /otel-lgtm/grafana/conf/provisioning/dashboards/localembed/localembed.json
+          ports: [{containerPort: 3000}, {containerPort: 4318}]
+          readinessProbe:
+            httpGet: {path: /api/health, port: 3000}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /otel-lgtm/prometheus.yaml, subPath: prometheus.yaml, readOnly: true}
+            - {name: config, mountPath: /otel-lgtm/localembed-alerts.yaml, subPath: alerts.yaml, readOnly: true}
+            - {name: config, mountPath: /otel-lgtm/otelcol-config.yaml, subPath: collector.yaml, readOnly: true}
+            - {name: config, mountPath: /otel-lgtm/grafana/conf/provisioning/dashboards/localembed.yaml, subPath: dashboards.yaml, readOnly: true}
+            - {name: config, mountPath: /otel-lgtm/grafana/conf/provisioning/dashboards/localembed/localembed.json, subPath: localembed.json, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: {{ .Release.Name }}-config}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.dashboard.storageClass }}
+        storageClassName: {{ .Values.dashboard.storageClass | quote }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.dashboard.storage }}}}
+{{- end }}

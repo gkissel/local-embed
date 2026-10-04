@@ -1,0 +1,6 @@
+.git
+.env*
+**/.secrets
+node_modules
+_site
+docs/site/_site

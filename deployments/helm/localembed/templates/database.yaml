@@ -1,0 +1,59 @@
+{{- if .Values.database.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-database
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, role: database}
+  ports: [{name: postgres, port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-database
+spec:
+  serviceName: {{ .Release.Name }}-database
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: database}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: database}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: database
+          image: {{ .Values.database.image | quote }}
+          resources: {{ toYaml .Values.database.resources | nindent 12 }}
+          env:
+            - {name: POSTGRES_DB, value: localembed}
+            - {name: POSTGRES_PASSWORD_FILE, value: /run/secrets/postgres_password}
+          ports: [{containerPort: 5432}]
+          readinessProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, localembed]}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql}
+            - {name: credentials, mountPath: /run/secrets, readOnly: true}
+            - {name: config, mountPath: /docker-entrypoint-initdb.d/10-localembed.sh, subPath: init-database.sh, readOnly: true}
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ .Values.adminSecretName }}
+            items:
+              - {key: postgres_password, path: postgres_password}
+              {{- range $role := list "admin" "worker" "poller" "api" "snapshot" "consumer" }}
+              - {key: {{ $role }}_password, path: {{ $role }}_password}
+              {{- end }}
+        - name: config
+          configMap: {name: {{ .Release.Name }}-config, defaultMode: 0555}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.database.storageClass }}
+        storageClassName: {{ .Values.database.storageClass | quote }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.database.storage }}}}
+{{- end }}

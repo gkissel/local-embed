@@ -1,0 +1,103 @@
+{
+  "issue": 9,
+  "verification_date": "2026-10-04",
+  "environment": {
+    "deno": "2.9.7",
+    "helm": "3.19.0",
+    "kind": "0.33.0",
+    "kubernetes": "1.37.0",
+    "postgresql": "18.3",
+    "pg_search": "0.22.6",
+    "vector": "0.8.1",
+    "gpu_tested": false,
+    "network_policy_enforcement_tested": false
+  },
+  "inference": {
+    "image": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c",
+    "model": "intfloat/multilingual-e5-base",
+    "revision": "129286372ebbc09af0394786dd03e16427ade171",
+    "dimensions": 768,
+    "source_records_embedded": 8,
+    "model_cache_approx_bytes": 1100000000
+  },
+  "results": {
+    "static_check": "passed",
+    "unit_tests": {
+      "passed": 10,
+      "failed": 0,
+      "ignored": 32
+    },
+    "database_integration_tests": {
+      "passed": 34,
+      "failed": 0
+    },
+    "existing_query_api_test_with_real_tei": {
+      "passed": 1,
+      "failed": 0
+    },
+    "compose_real_tei_smoke": "passed",
+    "kind_real_tei_smoke": "passed",
+    "hybrid_read_only_consumer": "passed",
+    "fresh_grafana_secret_auth": "passed; default admin password rejected",
+    "helm_replicas": {
+      "worker": 2,
+      "api": 2,
+      "poller": 1,
+      "snapshot": 1
+    },
+    "collector_faults": [
+      "backend outage plus SIGKILL/restart recovery",
+      "unstructured log filter",
+      "queue saturation receiver rejection",
+      "configured storage limit receiver rejection",
+      "full tmpfs receiver rejection"
+    ],
+    "native_shutdown": {
+      "SIGTERM": {
+        "exit_code": 0,
+        "final_log_exported": true
+      },
+      "SIGKILL": {
+        "exit_code": 137,
+        "final_log_exported": false
+      }
+    },
+    "actual_roles_SIGTERM": {
+      "worker": 0,
+      "api": 0,
+      "poller": 0,
+      "snapshot": 0
+    }
+  },
+  "idle_memory_observation": {
+    "tei_gib": 1.355,
+    "lgtm_mib": 554.8,
+    "production_sizing_result": false
+  },
+  "reproduction": [
+    "deno task check",
+    "deno task test",
+    "scripts/deployment/verify-reference.sh",
+    "scripts/deployment/kubernetes-secrets.sh localembed localembed",
+    "helm install localembed deployments/helm/localembed -n localembed",
+    "deno test --allow-read --allow-env --allow-net tests/api_integration_test.ts with TEST_DATABASE_URL, TEST_TEI_ENDPOINT and LOCAL_EMBED_TEI_API_KEY"
+  ],
+  "remaining_issues": [
+    10,
+    12,
+    13,
+    14,
+    15,
+    17,
+    26,
+    27
+  ],
+  "limitations": [
+    "Kind kindnet does not enforce NetworkPolicy",
+    "GPU backend not executed",
+    "production TLS/auth and capacity require target-environment validation",
+    "Collector persistence does not protect all acknowledged or application-buffered events",
+    "larger real-TEI proxy/cancellation resilience suite remains #17",
+    "GitHub Actions workflow packaged but not remotely executed"
+  ]
+}

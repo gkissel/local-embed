@@ -333,3 +333,48 @@ inferência simulada, filtros, configuração concorrente, snapshot retido, fres
 permissões. A execução com TEI real continua na #17; avaliação geral/qualidade permanece na #10.
 Operação em [hybrid-search.md](hybrid-search.md); dados/planos completos em
 [evaluation/hybrid-storage.json](evaluation/hybrid-storage.json).
+
+## #9 — Implantação de referência com Compose e Helm
+
+**O que mudou:** uma imagem Deno com dependências travadas executa worker, API, poller, snapshot e
+administração. Compose inicia ParadeDB/pgvector/pg_search no mesmo banco, TEI E5 real e LGTM; Helm
+reutiliza as imagens, com réplicas, recursos, PVCs, secrets e endpoints configuráveis. O bootstrap
+administrativo cria o demonstrador/BM25, aplica a configuração e distribui grants mínimos antes de
+liberar a execução. As credenciais administrativas não chegam aos runtimes.
+
+**Pontos positivos:** ambiente reproduzível e testado com inferência real; inicialização não destrói
+volumes existentes; consumidor SQL recebe somente leitura. A API e o modelo têm chaves separadas.
+Workers renovam a posse, cada réplica recebe identidade de telemetria própria e o snapshot permanece
+único. Filas persistentes e limitadas no Collector mitigam indisponibilidade do backend. Foram
+provisionados alertas de freshness, saúde do Collector, pressão/rejeição de fila, amostragem de
+traces e limites de CPU/memória. A implantação Helm foi exercitada em Kind, inclusive duas réplicas
+de worker/API e consulta real.
+
+**Pontos negativos:** a stack completa consome CPU/memória e precisa baixar/aquecer o modelo;
+Compose usa arquivos locais de secrets, sem criptografia por secret manager. Persistência do
+Collector adiciona fsync e espaço em disco; não protege o buffer ainda na aplicação nem garante
+entrega quando a fila/disco esgota. SIGKILL não permite exportação final. LGTM é um demonstrador sem
+alta disponibilidade; produção exige serviços externos dimensionados, TLS/autenticação e roteamento
+de alertas. GPU e enforcement de NetworkPolicy não foram validados no Kind, que usa CNI sem
+enforcement.
+
+**Mitigações e pendências:** produção possui guardas para evitar usar o bundle/banco de demonstração
+ou OTLP desprotegido. #27 registra validação real de CNI, TLS, storage, rotação/recuperação e GPU;
+#10 mede carga/volume/overhead. Quotas/permissões por consumidor continuam na #15; preparação de
+prefixo/token na #14; retenção na #12; índice online na #13; suite ampliada TEI na #17; redução de
+custo de counters/snapshot na #26. O limite de concorrência TEI vale por réplica de inferência, não
+como quota global. Ativação e construção HNSW atuais ainda podem bloquear escritas.
+
+**Evidências:** check estático e dez testes comuns passaram; 34 integrações passaram em ParadeDB
+PostgreSQL 18.3, pg_search 0.22.6 e vector 0.8.1. Compose e Kind processaram oito embeddings reais
+de 768 dimensões e retornaram consulta API com revisão aplicada; busca híbrida usou consumidor
+somente leitura. Testes com Collector real cobriram backend indisponível, reinício com dados
+persistidos, fila cheia, limite de storage e disco cheio. Exportação final foi observada após
+SIGTERM; SIGKILL terminou sem finalização. Quatro runtimes reais encerraram com código zero.
+Autenticação Grafana foi validada inclusive em volume novo, rejeitando a senha padrão.
+
+**Problemas encontrados na validação:** permissões entre UIDs diferentes impediam leitura dos
+secrets; newline em secret utilizado como variável de ambiente invalidava a autenticação TEI;
+`GF_*__FILE` não é processado pelo entrypoint do bundle LGTM. Corrigimos montagem/leitura,
+normalização e inicialização explícita da senha. Esses problemas só apareceram ao executar os
+ambientes reais, não no lint dos manifests. Operação e limites em [deployment.md](deployment.md).

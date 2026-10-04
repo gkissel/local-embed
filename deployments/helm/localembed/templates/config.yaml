@@ -1,0 +1,26 @@
+{{- if .Values.production }}
+{{- if .Values.dashboard.enabled }}{{ fail "Production requires dashboard.enabled=false and external telemetry backends" }}{{ end }}
+{{- if .Values.database.enabled }}{{ fail "Production requires database.enabled=false and a separately managed database" }}{{ end }}
+{{- if not .Values.networkPolicy.enabled }}{{ fail "Production requires networkPolicy.enabled=true" }}{{ end }}
+{{- if .Values.telemetry.enabled }}
+{{- if not (hasPrefix "https://" .Values.telemetry.endpoint) }}{{ fail "Production OTLP endpoint must use HTTPS" }}{{ end }}
+{{- if not .Values.telemetry.headersSecretKey }}{{ fail "Production OTLP requires an authentication headers secret key" }}{{ end }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  init-database.sh: |
+{{ .Files.Get "files/init-database.sh" | indent 4 }}
+  collector.yaml: |
+{{ .Files.Get "files/collector.yaml" | indent 4 }}
+  dashboards.yaml: |
+{{ .Files.Get "files/dashboards.yaml" | indent 4 }}
+  localembed.json: |
+{{ .Files.Get "files/localembed.json" | indent 4 }}
+  prometheus.yaml: |
+{{ .Files.Get "files/prometheus.yaml" | indent 4 }}
+  alerts.yaml: |
+{{ .Files.Get "files/alerts.yaml" | indent 4 }}
