@@ -205,3 +205,12 @@ query deadline.
 Tests use the pinned ParadeDB reference database and simulated inference/HTTP providers. Real-model
 API verification remains #17. These checks demonstrate functional safety and recovery, not
 production latency, throughput, retrieval quality or the cost of maintenance locks.
+
+## Telemetry migration follow-up (#7)
+
+`prepare-worker` also adds execution start timestamps, sharded enqueue counters and the
+five-argument enqueue function with explicit origin. Stop older runtimes before preparing and grant
+SELECT/INSERT/UPDATE on `localembed.enqueue_metrics` and EXECUTE on
+`localembed.enqueue_task(bigint, text, text, text, text)` to source/dependency writers and pollers
+before restart. The four-argument compatibility function remains available for manual enqueue.
+Workers and API roles need no counter writes. See [telemetry.md](telemetry.md).

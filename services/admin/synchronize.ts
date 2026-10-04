@@ -92,7 +92,7 @@ export async function backfill(url: string): Promise<void> {
               [state.cursor, size],
             );
             for (const row of rows) {
-              await tx`SELECT localembed.enqueue_task(${revision.id}, ${entity.name}, ${row.id}, 'upsert')`;
+              await tx`SELECT localembed.enqueue_task(${revision.id}, ${entity.name}, ${row.id}, 'upsert', 'backfill')`;
             }
             finished = rows.length < size;
             await tx`UPDATE localembed.backfills SET cursor = ${

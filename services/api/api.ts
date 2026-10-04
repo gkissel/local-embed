@@ -1,3 +1,4 @@
+import { event, type EventContext, span } from '../shared/telemetry.ts';
 import postgres from 'postgres';
 import { attemptLimit, classify, ProcessingError, retryDelay, waitRetry } from '../shared/retry.ts';
 import type { Configuration } from '../admin/apply.ts';
@@ -72,7 +73,7 @@ export function createHandler(
   if (!/^[a-fA-F0-9]{64}$/.test(key)) throw new Error('Service key must encode 32 bytes as hex');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Timeout must be positive');
   const expected = new TextEncoder().encode(`Bearer ${key}`);
-  return async (request) => {
+  const handle = async (request: Request, context: EventContext): Promise<Response> => {
     const path = new URL(request.url).pathname;
     if (path !== '/v1/embeddings') return error(404, 'not_found', 'Route not found');
     if (request.method !== 'POST') {
@@ -84,6 +85,7 @@ export function createHandler(
     let mismatch = supplied.length ^ expected.length;
     for (let i = 0; i < expected.length; i++) mismatch |= expected[i] ^ (supplied[i] ?? 0);
     if (mismatch) return error(401, 'unauthorized', 'Missing or invalid service key');
+    context.consumer = 'service-key';
     const mediaType = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
     if (mediaType !== 'application/json') {
       return error(400, 'validation_error', 'Content-Type must be application/json');
@@ -103,25 +105,35 @@ export function createHandler(
       !/^[A-Za-z_][A-Za-z0-9_]*$/.test(body.entity) || typeof body.input !== 'string' ||
       [...body.input].length < 1 || [...body.input].length > 32768
     ) return error(400, 'validation_error', 'Invalid entity, input or additional properties');
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]);
     try {
       const deadline = Date.now() + timeoutMs;
-      const signal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]);
       const config = await cancellable(load(body.entity), signal);
       const entity = config?.entities.find((item) => item.name === body.entity);
       if (!config || !entity) return error(404, 'entity_not_found', 'Entity is not applied');
+      context.entity = entity.name;
+      context.configuration_id = config.applied_revision;
       const provider = config.providers.find((item) => item.name === entity.provider);
       if (!provider) throw new Error('Missing provider');
       let vector: number[] | undefined;
       const policy = config.operations?.retries ?? {};
       for (let attempt = 1; attempt <= attemptLimit(policy); attempt++) {
         try {
-          vector = await cancellable(inference(provider, body.input, signal), signal);
+          vector = await span('query.provider', context, () => {
+            event('provider_call', context);
+            return cancellable(inference(provider, body.input as string, signal), signal);
+          });
           break;
         } catch (cause) {
           const failure = classify(cause);
           if (signal.aborted || !failure.retryable || attempt === attemptLimit(policy)) throw cause;
           const delay = retryDelay(attempt, failure, policy);
           if (delay >= deadline - Date.now()) throw cause;
+          event('query_retry_scheduled', {
+            ...context,
+            error_code: failure.code,
+            provider_status: failure.status,
+          });
           await waitRetry(delay, signal);
         }
       }
@@ -141,8 +153,27 @@ export function createHandler(
           fingerprint: await fingerprint(entity, provider, body.input),
         },
       });
-    } catch {
+    } catch (cause) {
+      const failure = classify(cause);
+      event('query_failed', {
+        ...context,
+        error_code: signal.aborted ? 'execution_interrupted' : failure.code,
+        reason: signal.aborted
+          ? (request.signal.aborted ? 'client_cancelled' : 'deadline')
+          : undefined,
+        provider_status: failure.status,
+      });
       return error(503, 'provider_unavailable', 'Embedding service is unavailable');
     }
   };
+  return (request) =>
+    span('query.request', { service: 'query-api' }, async () => {
+      const context: EventContext = { service: 'query-api' };
+      const response = await handle(request, context);
+      event(response.status === 401 ? 'authorization_rejected' : 'query_response', {
+        ...context,
+        status: response.status,
+      });
+      return response;
+    });
 }

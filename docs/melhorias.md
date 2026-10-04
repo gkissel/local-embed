@@ -1,8 +1,8 @@
 # Melhorias do LocalEmbed: registro para o artigo
 
-Este arquivo reúne decisões, evidências e limitações das issues #3, #11, #4, #5 e #6. É um registro
-técnico para apoiar a redação do artigo; as medições abaixo não constituem uma avaliação geral de
-desempenho.
+Este arquivo reúne decisões, evidências e limitações das issues #3, #11, #4, #5, #6 e #7. É um
+registro técnico para apoiar a redação do artigo; as medições abaixo não constituem uma avaliação
+geral de desempenho.
 
 ## Geração e armazenamento de embeddings — issue #3
 
@@ -214,9 +214,6 @@ throughput, latência, custo dos locks ou qualidade semântica. Operação e per
   identificadores ou configurações.
 - [#13](https://github.com/gkissel/local-embed/issues/13): construção concorrente de HNSW, com
   acompanhamento de falhas e estado do índice.
-- [#7](https://github.com/gkissel/local-embed/issues/7): métricas que separem alterações capturadas,
-  estados reunidos, inferências e eventos de lease. A contagem de linhas da fila reutilizável não
-  representa histórico acumulado.
 - [#8](https://github.com/gkissel/local-embed/issues/8): demonstração híbrida e comparação entre
   vetor na origem e destino separado.
 
@@ -241,3 +238,48 @@ As mitigações de polling e dependências foram registradas em
 [#22](https://github.com/gkissel/local-embed/issues/22) (avaliação de CDC). Falhas e reprocessamento
 foram entregues na #6; as medições de custo e atraso foram acrescentadas à #10. As mitigações
 #18–#22 estão planejadas, não implementadas.
+
+## Mitigações de resiliência planejadas
+
+As limitações da #6 têm os seguintes encaminhamentos. Ainda não são garantias implementadas:
+
+- #25: reutilizar inferência bem-sucedida por fingerprint e parâmetros, limitar cache e verificar
+  suporte explícito a idempotência do provedor. Uma resposta perdida pode repetir cálculo; sem
+  cooperação do provedor não há garantia de execução única. O cache da API permanece na #16.
+- #23 (P1): validar o snapshot antes da ativação, acompanhar alterações concorrentes e conferir
+  apenas o delta sob uma barreira curta. Exige protocolo que cubra commits tardios e exclusões;
+  medir tempo de bloqueio antes de afirmar redução.
+- #12: reter destinos por idade e quantidade, preservar revisões ativas/em preparação e janela de
+  rollback, oferecer simulação e impedir limpeza com execuções/leitores ainda em uso.
+- #24 (P2): manter a revisão anterior sincronizada durante uma janela limitada de rollback. Reduz
+  tempo de recuperação ao custo de escritas, armazenamento e possivelmente inferência duplicados.
+  Fora da janela, reconstruir continua necessário.
+- #17 (P1): executar inferência com TEI/modelo fixados e testar limites, prefixo, dimensão e
+  cancelamento. Um proxy de falhas verifica 429/503 e perda de resposta, distinguindo falha simulada
+  da execução real do modelo.
+
+## Telemetria operacional e dashboard — issue #7
+
+**O que foi feito:** OpenTelemetry instrumenta worker, API e poller; Grafana é provisionado com 16
+painéis sobre Prometheus, Loki e Tempo. Um processo separado lê snapshots com permissões somente de
+leitura. Capturas/enfileiramentos e trabalho reunido têm contadores transacionais separados da fila
+reutilizável; idade de execução usa timestamp de aquisição, separado da idade do trabalho
+solicitado. Logs/traces incluem contexto de tarefa sem conteúdo ou vetores.
+
+**Pontos positivos:** o operador consegue distinguir profundidade atual, solicitações capturadas,
+inferências, resultados, retries, leases e reconciliação. Limpeza de tarefas não apaga os contadores
+persistidos. Logs carregam IDs de trace para investigação; filtros do Collector excluem
+instrumentação automática com URLs e logs fora do formato sanitizado.
+
+**Pontos negativos:** contadores adicionam uma escrita por enfileiramento e possíveis disputas entre
+transações, mesmo com 16 shards. Snapshots leem a fila periodicamente e ficam antigos se o banco
+falhar. Eventos de processo podem se perder antes da exportação ou durante indisponibilidade do
+backend; não substituem auditoria durável. A stack LGTM é de referência local, consome recursos e
+ainda exige política de retenção/segurança para produção (#9/#12). A API identifica apenas a chave
+de serviço compartilhada; identidades, quotas e cache continuam nas #15/#16.
+
+**Evidências:** testes determinísticos verificam contadores após rollback, migração e remoção de
+tarefas concluídas, zeros na fila e acesso somente de leitura; o teste de privacidade rejeita campos
+extras e credenciais. Smoke de exportação verificou métricas em Prometheus, logs em Loki, trace em
+Tempo e provisionamento dos painéis; inferência foi simulada. Não houve benchmark de throughput,
+custo dos contadores ou qualidade semântica. Operação e reprodução em [telemetry.md](telemetry.md).

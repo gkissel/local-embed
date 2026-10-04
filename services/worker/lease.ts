@@ -1,3 +1,4 @@
+import { event, type EventContext } from '../shared/telemetry.ts';
 import type postgres from 'postgres';
 
 /** One execution token; renewals never resurrect an expired reservation. */
@@ -15,9 +16,13 @@ export class Lease {
     private leaseSeconds: number,
     private renewEveryMs: number,
     maxExecutionMs: number,
+    readonly context: EventContext = { service: 'worker' },
   ) {
     this.deadlineTimer = setTimeout(
-      () => this.controller.abort('execution_timeout'),
+      () => {
+        event('execution_interrupted', { ...this.context, reason: 'execution_timeout' });
+        this.controller.abort('execution_timeout');
+      },
       maxExecutionMs,
     );
     this.schedule();
@@ -38,8 +43,10 @@ export class Lease {
         WHERE id = ${this.id} AND lease_token = ${this.token}::uuid AND status = 'processing'
           AND lease_until > clock_timestamp() AND execution_deadline > clock_timestamp()
         RETURNING id`;
+      event(rows.length ? 'lease_renewed' : 'lease_lost', this.context);
       if (!rows.length) this.controller.abort('ownership_lost');
     } catch {
+      event('lease_lost', { ...this.context, reason: 'renewal_failed' });
       this.controller.abort('renewal_failed');
     }
   }

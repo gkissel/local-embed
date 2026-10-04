@@ -1,3 +1,4 @@
+import { event, span } from '../shared/telemetry.ts';
 import postgres from 'postgres';
 import type { Configuration } from '../admin/apply.ts';
 import { idType, quote, readContent, table } from '../worker/content.ts';
@@ -20,7 +21,10 @@ export class Poller {
     return this.sql.end();
   }
   /** One bounded incremental batch and one reconciliation batch per polling entity. */
-  async tick(): Promise<void> {
+  tick(): Promise<void> {
+    return span('poller.tick', { service: 'poller' }, () => this.scan());
+  }
+  private async scan(): Promise<void> {
     const revisions = await this
       .sql`SELECT id, configuration FROM localembed.configurations ORDER BY id`;
     for (const revision of revisions) {
@@ -49,6 +53,13 @@ export class Poller {
               ORDER BY root.${stamp}, root.${key} LIMIT $4`,
             [state.time_text, state.cursor_id, state.end_text, this.batchSize],
           );
+          event('poll_scanned', {
+            service: 'poller',
+            entity: entity.name,
+            configuration_id: revision.id,
+            phase: 'incremental',
+            count: rows.length,
+          });
           for (const row of rows) {
             await this.enqueueChanged(tx, config, entity, revision.id, row.identifier);
           }
@@ -96,7 +107,10 @@ export class Poller {
       [identifier],
     );
     if (stored?.fingerprint === hash) return;
-    await this.enqueueRecoverable(tx, revision, entity.name, identifier, 'upsert');
+    const changed = await this.enqueueRecoverable(tx, revision, entity.name, identifier, 'upsert');
+    if (changed) {
+      event('poll_changed', { service: 'poller', entity: entity.name, configuration_id: revision });
+    }
   }
   private async enqueueRecoverable(
     tx: postgres.TransactionSql,
@@ -104,13 +118,14 @@ export class Poller {
     entity: string,
     identifier: string,
     operation: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Active workers recheck content; failed diagnostics require explicit reprocessing (#6).
     // Serialize with enqueue/worker transitions using the same task row.
     const [task] = await tx`SELECT status FROM localembed.tasks
       WHERE configuration_id = ${revision} AND entity = ${entity} AND source_id = ${identifier} FOR UPDATE`;
-    if (task && task.status !== 'done') return;
-    await tx`SELECT localembed.enqueue_task(${revision}, ${entity}, ${identifier}, ${operation})`;
+    if (task && task.status !== 'done') return false;
+    await tx`SELECT localembed.enqueue_task(${revision}, ${entity}, ${identifier}, ${operation}, 'polling')`;
+    return true;
   }
   private async reconcileBatch(
     tx: postgres.TransactionSql,
@@ -141,6 +156,13 @@ export class Poller {
         } WHERE ($1::${type} IS NULL OR ${key} > $1::${type}) AND ${key} <= $3::${type} ORDER BY ${key} LIMIT $2`,
         [state.sweep_cursor as string | null, this.batchSize, state.sweep_upper as string | null],
       );
+      event('poll_scanned', {
+        service: 'poller',
+        entity: entity.name,
+        configuration_id: revision,
+        phase: 'source',
+        count: rows.length,
+      });
       for (const row of rows) {
         await this.enqueueChanged(tx, config, entity, revision, row.identifier);
       }
@@ -171,10 +193,22 @@ export class Poller {
           ORDER BY dest.source_id LIMIT $2`,
         [state.delete_cursor as string | null, this.batchSize, state.delete_upper as string | null],
       );
+      event('poll_orphans', {
+        service: 'poller',
+        entity: entity.name,
+        configuration_id: revision,
+        phase: 'delete',
+        count: rows.length,
+      });
       for (const row of rows) {
         await this.enqueueRecoverable(tx, revision, entity.name, row.identifier, 'delete');
       }
       if (rows.length < this.batchSize) {
+        event('reconciliation_completed', {
+          service: 'poller',
+          entity: entity.name,
+          configuration_id: revision,
+        });
         await tx`UPDATE localembed.polling_state SET sweep_cursor = NULL, sweep_upper = NULL, delete_cursor = NULL, delete_upper = NULL, phase = 'source',
           next_reconcile = clock_timestamp() + ${interval} * interval '1 second'
           WHERE configuration_id = ${revision} AND entity = ${entity.name}`;

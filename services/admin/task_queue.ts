@@ -25,6 +25,13 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS error_code text;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS provider_status integer;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS requested_at timestamptz NOT NULL DEFAULT now();`);
+  await tx.unsafe(
+    `ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS execution_started_at timestamptz;
+    CREATE TABLE IF NOT EXISTS localembed.enqueue_metrics (
+      entity text NOT NULL, shard integer NOT NULL, origin text NOT NULL,
+      enqueued bigint NOT NULL DEFAULT 0, coalesced bigint NOT NULL DEFAULT 0,
+      PRIMARY KEY(entity, shard, origin))`,
+  );
   const [installed] = await tx`SELECT to_regclass('localembed.tasks_key') AS installed`;
   if (!installed.installed) {
     // Fold the old append-only queue under an exclusive lock. Increment attempts to
@@ -51,9 +58,11 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
   await tx.unsafe(
     `CREATE INDEX IF NOT EXISTS tasks_ready ON localembed.tasks (requested_at, id) WHERE status IN ('pending', 'processing');
     DROP INDEX IF EXISTS localembed.tasks_available;
-    CREATE OR REPLACE FUNCTION localembed.enqueue_task(revision bigint, entity_name text, identifier text, change_operation text)
+    CREATE OR REPLACE FUNCTION localembed.enqueue_task(revision bigint, entity_name text, identifier text, change_operation text, origin_name text)
     RETURNS void LANGUAGE plpgsql AS $enqueue$
+    DECLARE merged boolean;
     BEGIN
+      IF origin_name NOT IN ('trigger', 'polling', 'backfill', 'manual') THEN RAISE EXCEPTION 'Invalid enqueue origin'; END IF;
       IF NOT localembed.revision_eligible(revision, entity_name) THEN RETURN; END IF;
       INSERT INTO localembed.tasks(configuration_id, entity, source_id, operation)
       VALUES (revision, entity_name, identifier, change_operation)
@@ -66,9 +75,19 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
         attempts = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.attempts ELSE 0 END,
         error_code = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.error_code ELSE NULL END,
         provider_status = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.provider_status ELSE NULL END,
-        last_error = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.last_error ELSE NULL END;
+        last_error = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.last_error ELSE NULL END
+      RETURNING generation > processed_generation + 1 OR status IN ('processing', 'failed') INTO merged;
+      INSERT INTO localembed.enqueue_metrics(entity, shard, origin, enqueued, coalesced)
+        VALUES(entity_name, (abs(hashtext(identifier)::bigint) % 16)::integer, origin_name, 1, merged::integer)
+        ON CONFLICT(entity, shard, origin) DO UPDATE SET
+          enqueued = localembed.enqueue_metrics.enqueued + 1,
+          coalesced = localembed.enqueue_metrics.coalesced + EXCLUDED.coalesced;
     END;
-    $enqueue$;`,
+    $enqueue$;
+    CREATE OR REPLACE FUNCTION localembed.enqueue_task(revision bigint, entity_name text, identifier text, change_operation text)
+    RETURNS void LANGUAGE sql AS $legacy$
+      SELECT localembed.enqueue_task(revision, entity_name, identifier, change_operation, 'manual')
+    $legacy$;`,
   );
 }
 
@@ -128,12 +147,12 @@ export async function installCapture(
       IF TG_OP = 'DELETE' OR (TG_OP = 'UPDATE' AND OLD.${id} IS DISTINCT FROM NEW.${id}) THEN
         PERFORM localembed.enqueue_task(${revision}, ${
     literal(entity.name)
-  }, OLD.${id}::text, 'delete');
+  }, OLD.${id}::text, 'delete', 'trigger');
       END IF;
       IF TG_OP <> 'DELETE' THEN
         PERFORM localembed.enqueue_task(${revision}, ${
     literal(entity.name)
-  }, NEW.${id}::text, 'upsert');
+  }, NEW.${id}::text, 'upsert', 'trigger');
         RETURN NEW;
       END IF;
       RETURN OLD;
@@ -164,7 +183,7 @@ export async function installCapture(
         LOOP
           PERFORM localembed.enqueue_task(${revision}, ${
       literal(entity.name)
-    }, affected.identifier, 'upsert');
+    }, affected.identifier, 'upsert', 'trigger');
         END LOOP;
         IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;

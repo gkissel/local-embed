@@ -1,4 +1,7 @@
+import { event } from '../shared/telemetry.ts';
+import { observeResources } from '../shared/resources.ts';
 import { Worker } from './worker.ts';
+observeResources();
 const url = Deno.env.get('DATABASE_URL');
 if (!url) throw new Error('DATABASE_URL is required');
 const worker = new Worker(url, undefined, {
@@ -19,6 +22,9 @@ try {
   while (!shutdown.signal.aborted) {
     if (!await worker.tick()) await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+} catch {
+  event('service_failed', { service: 'worker', error_code: 'service_unavailable' });
+  Deno.exitCode = 1;
 } finally {
   await worker.close();
 }

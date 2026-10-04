@@ -1,0 +1,8 @@
+{
+  "name": "@localembed/shared",
+  "exports": {
+    "./retry": "./retry.ts",
+    "./telemetry": "./telemetry.ts",
+    "./resources": "./resources.ts"
+  }
+}

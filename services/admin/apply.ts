@@ -95,6 +95,7 @@ export function validateConfiguration(value: unknown): Configuration {
         'localembed.entity_active',
         'localembed.entity_staging',
         'localembed.admin_actions',
+        'localembed.enqueue_metrics',
       ].includes(entity.destination.table)
     ) {
       throw new Error(`${entity.name}: reserved destination`);
