@@ -1,4 +1,5 @@
 import postgres from 'postgres';
+import { attemptLimit, classify, ProcessingError, retryDelay, waitRetry } from '../shared/retry.ts';
 import type { Configuration } from '../admin/apply.ts';
 import { fingerprint, type Generate, generate } from '../worker/worker.ts';
 import { cancellable } from '../worker/lease.ts';
@@ -18,10 +19,11 @@ export class ConfigurationStore {
     });
   }
   async load(entity: string): Promise<Configuration | undefined> {
-    const [row] = await this.sql`SELECT configuration FROM localembed.configurations
-      WHERE configuration->'entities' @> ${this.sql.json([{ name: entity }])}::jsonb
-      ORDER BY id DESC LIMIT 1`;
-    return row?.configuration as Configuration | undefined;
+    const [row] = await this.sql`SELECT c.id, c.configuration FROM localembed.entity_revisions v
+      JOIN localembed.configurations c ON c.id = v.configuration_id WHERE v.entity = ${entity} AND v.state = 'active'`;
+    return row
+      ? { ...row.configuration as Configuration, applied_revision: String(row.id) }
+      : undefined;
   }
   close(): Promise<void> {
     return this.sql.end();
@@ -102,24 +104,40 @@ export function createHandler(
       [...body.input].length < 1 || [...body.input].length > 32768
     ) return error(400, 'validation_error', 'Invalid entity, input or additional properties');
     try {
-      const config = await load(body.entity);
+      const deadline = Date.now() + timeoutMs;
+      const signal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]);
+      const config = await cancellable(load(body.entity), signal);
       const entity = config?.entities.find((item) => item.name === body.entity);
       if (!config || !entity) return error(404, 'entity_not_found', 'Entity is not applied');
       const provider = config.providers.find((item) => item.name === entity.provider);
       if (!provider) throw new Error('Missing provider');
-      const signal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]);
-      const vector = await cancellable(inference(provider, body.input, signal), signal);
+      let vector: number[] | undefined;
+      const policy = config.operations?.retries ?? {};
+      for (let attempt = 1; attempt <= attemptLimit(policy); attempt++) {
+        try {
+          vector = await cancellable(inference(provider, body.input, signal), signal);
+          break;
+        } catch (cause) {
+          const failure = classify(cause);
+          if (signal.aborted || !failure.retryable || attempt === attemptLimit(policy)) throw cause;
+          const delay = retryDelay(attempt, failure, policy);
+          if (delay >= deadline - Date.now()) throw cause;
+          await waitRetry(delay, signal);
+        }
+      }
       if (
         !Array.isArray(vector) || vector.length !== provider.dimensions ||
         !vector.every((n) => typeof n === 'number' && Number.isFinite(n))
-      ) throw new Error('Invalid embedding');
+      ) throw new ProcessingError('invalid_embedding');
       return Response.json({
         embedding: vector,
         dimensions: provider.dimensions,
         model: provider.model,
         provider: provider.name,
         generation: {
-          config_version: config.version,
+          config_version: config.applied_revision
+            ? `${config.version}@${config.applied_revision}`
+            : config.version,
           fingerprint: await fingerprint(entity, provider, body.input),
         },
       });

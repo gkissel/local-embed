@@ -1,6 +1,7 @@
 import { installCapture, installTaskQueue } from './task_queue.ts';
 import postgres from 'postgres';
 import { installPollingState } from './polling_state.ts';
+import { installRevisions } from './revisions.ts';
 import type { Configuration } from './apply.ts';
 
 const quote = (s: string) => '"' + s.replaceAll('"', '""') + '"';
@@ -15,8 +16,9 @@ export async function prepareWorker(url: string): Promise<void> {
         `UPDATE localembed.configurations SET configuration = (configuration #>> '{}')::jsonb WHERE jsonb_typeof(configuration) = 'string';
         CREATE TABLE IF NOT EXISTS localembed.backfills (configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, cursor text, complete boolean NOT NULL DEFAULT false, indexed boolean NOT NULL DEFAULT false, PRIMARY KEY(configuration_id, entity));`,
       );
+      await installRevisions(tx);
       const revisions =
-        await tx`SELECT id, configuration FROM localembed.configurations ORDER BY id`;
+        await tx`SELECT id, configuration FROM localembed.configurations c WHERE EXISTS (SELECT 1 FROM localembed.entity_revisions v WHERE v.configuration_id = c.id AND v.state IN ('active','staging')) ORDER BY id`;
       const sources = new Set<string>();
       for (const revision of revisions) {
         for (const entity of (revision.configuration as Configuration).entities) {
@@ -31,7 +33,17 @@ export async function prepareWorker(url: string): Promise<void> {
       await installPollingState(tx);
       for (const revision of revisions) {
         for (const entity of (revision.configuration as Configuration).entities) {
-          await installCapture(tx, entity, revision.id);
+          const [state] =
+            await tx`SELECT state, capture_namespace FROM localembed.entity_revisions WHERE configuration_id = ${revision.id} AND entity = ${entity.name}`;
+          if (state?.state !== 'retired') {
+            await installCapture(
+              tx,
+              entity,
+              revision.id,
+              state?.capture_namespace,
+              (revision.configuration as Configuration).entities.indexOf(entity),
+            );
+          }
         }
       }
     });
@@ -44,16 +56,25 @@ export async function backfill(url: string): Promise<void> {
   const sql = postgres(url, { max: 1 });
   try {
     const revisions =
-      await sql`SELECT id, configuration FROM localembed.configurations ORDER BY id`;
+      await sql`SELECT id, configuration FROM localembed.configurations c WHERE EXISTS (SELECT 1 FROM localembed.entity_revisions v WHERE v.configuration_id = c.id AND v.state IN ('active','staging')) ORDER BY id`;
     for (const revision of revisions) {
       const config = revision.configuration as Configuration & {
         operations?: { backfill?: { batch_size?: number } };
       };
       for (const entity of config.entities) {
+        const eligible =
+          await sql`SELECT 1 FROM localembed.entity_revisions WHERE configuration_id = ${revision.id} AND entity = ${entity.name} AND state IN ('active','staging')`;
+        if (!eligible.length) continue;
         await sql`INSERT INTO localembed.backfills (configuration_id, entity) VALUES (${revision.id}, ${entity.name}) ON CONFLICT DO NOTHING`;
         let finished = false;
         while (!finished) {
           await sql.begin(async (tx) => {
+            const eligible =
+              await tx`SELECT 1 FROM localembed.entity_revisions WHERE configuration_id = ${revision.id} AND entity = ${entity.name} AND state IN ('active','staging') FOR SHARE`;
+            if (!eligible.length) {
+              finished = true;
+              return;
+            }
             const [state] =
               await tx`SELECT * FROM localembed.backfills WHERE configuration_id = ${revision.id} AND entity = ${entity.name} FOR UPDATE`;
             if (state.complete) {
@@ -100,10 +121,13 @@ export async function buildIndexes(url: string): Promise<void> {
     await sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(78129412)`;
       const revisions =
-        await tx`SELECT id, configuration FROM localembed.configurations ORDER BY id`;
+        await tx`SELECT id, configuration FROM localembed.configurations c WHERE EXISTS (SELECT 1 FROM localembed.entity_revisions v WHERE v.configuration_id = c.id AND v.state IN ('active','staging')) ORDER BY id`;
       for (const revision of revisions) {
         const config = revision.configuration as Configuration;
         for (const entity of config.entities) {
+          const eligible =
+            await tx`SELECT 1 FROM localembed.entity_revisions WHERE configuration_id = ${revision.id} AND entity = ${entity.name} AND state IN ('active','staging') FOR SHARE`;
+          if (!eligible.length) continue;
           const [state] =
             await tx`SELECT * FROM localembed.backfills WHERE configuration_id = ${revision.id} AND entity = ${entity.name} FOR UPDATE`;
           if (!state?.complete) {
@@ -124,7 +148,7 @@ export async function buildIndexes(url: string): Promise<void> {
           const m = entity.destination.hnsw?.m ?? 16;
           const ef = entity.destination.hnsw?.ef_construction ?? 64;
           await tx.unsafe(
-            `CREATE INDEX ${quote(entity.name + '_embedding_hnsw')} ON ${
+            `CREATE INDEX ${quote(entity.destination.table.split('.')[1] + '_hnsw')} ON ${
               table(entity.destination.table)
             } USING hnsw (embedding ${op}) WITH (m = ${m}, ef_construction = ${ef})`,
           );

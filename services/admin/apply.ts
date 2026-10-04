@@ -1,4 +1,5 @@
 import { installCapture, installTaskQueue } from './task_queue.ts';
+import { installRevisions } from './revisions.ts';
 import { installPollingState } from './polling_state.ts';
 import AjvModule from 'ajv/dist/2020.js';
 import formatsModule from 'ajv-formats';
@@ -34,7 +35,17 @@ type Entity = {
   template: string;
   destination: { table: string; hnsw?: { m?: number; ef_construction?: number } };
 };
-export type Configuration = { version: string; providers: Provider[]; entities: Entity[] };
+export type Configuration = {
+  version: string;
+  providers: Provider[];
+  entities: Entity[];
+  applied_revision?: string;
+  operations?: {
+    retries?: import('../shared/retry.ts').RetryPolicy;
+    backfill?: { batch_size?: number };
+    reconciliation?: { interval_seconds?: number };
+  };
+};
 type Validator = {
   (value: unknown): boolean;
   errors?: { instancePath: string; message?: string }[];
@@ -80,6 +91,10 @@ export function validateConfiguration(value: unknown): Configuration {
         'localembed.tasks_key',
         'localembed.tasks_ready',
         'localembed.polling_state',
+        'localembed.entity_revisions',
+        'localembed.entity_active',
+        'localembed.entity_staging',
+        'localembed.admin_actions',
       ].includes(entity.destination.table)
     ) {
       throw new Error(`${entity.name}: reserved destination`);
@@ -182,12 +197,13 @@ export async function applyConfiguration(
   databaseUrl: string,
   value: unknown,
   probe = preflight,
-): Promise<void> {
+  staging = false,
+): Promise<string> {
   const config = validateConfiguration(value);
   for (const provider of config.providers) await probe(provider);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
-    await sql.begin(async (tx) => {
+    return await sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(78129412)`;
       const [version] = await tx`SHOW server_version_num`;
       if (Number(version.server_version_num) < 180000) {
@@ -273,13 +289,46 @@ export async function applyConfiguration(
         }) AS destination`;
         if (existing[0].destination) {
           throw new Error(
-            `${entity.name}: destination already exists; configuration updates are not yet supported`,
+            `${entity.name}: destination already exists; stage a revision with a new destination`,
           );
         }
       }
       await tx.unsafe(`CREATE SCHEMA IF NOT EXISTS localembed;
         CREATE TABLE IF NOT EXISTS localembed.configurations (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration jsonb NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());
         CREATE TABLE IF NOT EXISTS localembed.backfills (configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL, cursor text, complete boolean NOT NULL DEFAULT false, indexed boolean NOT NULL DEFAULT false, PRIMARY KEY(configuration_id, entity));`);
+      await installRevisions(tx);
+      for (const entity of config.entities) {
+        const [current] =
+          await tx`SELECT c.configuration FROM localembed.entity_revisions v JOIN localembed.configurations c ON c.id = v.configuration_id WHERE v.entity = ${entity.name} AND v.state = 'active'`;
+        if (current && !staging) {
+          throw new Error(`${entity.name}: use stage for an existing entity`);
+        }
+        if (current) {
+          const previous = (current.configuration as Configuration).entities.find((item) =>
+            item.name === entity.name
+          )!;
+          const shape = (item: Entity) =>
+            JSON.stringify([
+              item.source.table,
+              item.source.id.column,
+              item.source.id.type,
+              (item.dependencies ?? []).map((
+                dep,
+              ) => [
+                dep.name,
+                dep.source_column,
+                dep.target.table,
+                dep.target.id.column,
+                dep.target.id.type,
+              ]),
+            ]);
+          if (shape(previous) !== shape(entity)) {
+            throw new Error(
+              `${entity.name}: changing source/relation identity is not supported; declare a new entity`,
+            );
+          }
+        }
+      }
       await installTaskQueue(tx);
       await installPollingState(tx);
       const [revision] = await tx`INSERT INTO localembed.configurations (configuration) VALUES (${
@@ -293,8 +342,15 @@ export async function applyConfiguration(
         await tx.unsafe(
           `CREATE TABLE ${destination} (source_id ${idType} PRIMARY KEY, embedding vector(${provider.dimensions}) NOT NULL, fingerprint text NOT NULL, configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), updated_at timestamptz NOT NULL DEFAULT now())`,
         );
-        await installCapture(tx, entity, revision.id);
+        await tx`INSERT INTO localembed.entity_revisions(configuration_id, entity, state, capture_namespace) VALUES (${revision.id}, ${entity.name}, ${
+          staging ? 'staging' : 'active'
+        }, ${staging})`;
+        await installCapture(tx, entity, revision.id, staging, config.entities.indexOf(entity));
       }
+      await tx`INSERT INTO localembed.admin_actions(action, details) VALUES (${
+        staging ? 'stage' : 'apply'
+      }, ${tx.json({ revision: revision.id })})`;
+      return String(revision.id);
     });
   } finally {
     await sql.end();

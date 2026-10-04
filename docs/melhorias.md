@@ -1,6 +1,6 @@
 # Melhorias do LocalEmbed: registro para o artigo
 
-Este arquivo reúne decisões, evidências e limitações das issues #3, #11, #4 e #5. É um registro
+Este arquivo reúne decisões, evidências e limitações das issues #3, #11, #4, #5 e #6. É um registro
 técnico para apoiar a redação do artigo; as medições abaixo não constituem uma avaliação geral de
 desempenho.
 
@@ -27,9 +27,10 @@ persistido; verificação de dimensão; armazenamento idempotente por identifica
 referência reproduzível.
 
 **Custos e limites:** cada alteração relevante ainda escreve na fila; o banco assume coordenação e
-armazenamento adicionais; a atualização de configurações permanece pendente. Polling e dependências
-diretas de conteúdo foram implementados na #5, descrita abaixo. O índice HNSW atual é construído de
-forma transacional e bloqueia escritas no destino durante a criação.
+armazenamento adicionais; alterações de configuração agora usam destino novo e ativação explícita
+(#6). Polling e dependências diretas de conteúdo foram implementados na #5, descrita abaixo. O
+índice HNSW atual é construído de forma transacional e bloqueia escritas no destino durante a
+criação.
 
 ## Coordenação, redução de tarefas e leases — issue #11
 
@@ -57,8 +58,8 @@ que ultrapassam o primeiro lease.
 consome CPU; o mesmo identificador pode sofrer contenção; o provedor pode continuar computando mesmo
 após o cancelamento. Uma queda após a inferência e antes da gravação pode provocar nova chamada. A
 garantia continua sendo processamento ao menos uma vez, sem promessa de inferência exatamente uma
-vez. Tarefas `failed` permanecem assim, inclusive após novas alterações na origem, até que o
-reprocessamento administrativo seja implementado na #6.
+vez. Tarefas `failed` permanecem assim, inclusive após novas alterações na origem, até
+reprocessamento administrativo explícito, entregue na #6.
 
 ## Evidência experimental controlada
 
@@ -102,7 +103,7 @@ decisão. Nenhuma superioridade de desempenho foi demonstrada até aqui.
 
 ## Geração de consulta autenticada — issue #4
 
-A API `POST /v1/embeddings` recebe entidade e texto avulso, consulta a última configuração aplicada
+A API `POST /v1/embeddings` recebe entidade e texto avulso, consulta a configuração ativa aplicada
 que contém essa entidade e devolve o vetor com modelo, provedor, dimensão e fingerprint de geração.
 A chave de serviço é independente da credencial do provedor. O papel de banco da API necessita
 apenas de leitura da configuração; não lê dados de origem e não modifica tarefas ou destinos.
@@ -118,10 +119,10 @@ consultas.
 separação entre acesso à API e acesso ao provedor.
 
 **Custos e limites:** cada consulta aceita lê a configuração e chama o provedor; não há cache, quota
-por consumidor ou retry automático. A chave compartilhada permite acesso a todas as entidades
-aplicadas. O limite de caracteres não substitui o limite de tokens do modelo. O controle completo de
-ativação e substituição de versões ainda depende da #6. A qualidade da busca depende também do
-modelo, preparação do texto e consulta realizada pela aplicação consumidora.
+por consumidor. Retries limitados foram adicionados na #6. A chave compartilhada permite acesso a
+todas as entidades aplicadas. O limite de caracteres não substitui o limite de tokens do modelo. O
+controle completo de ativação e substituição de versões foi implementado na #6. A qualidade da busca
+depende também do modelo, preparação do texto e consulta realizada pela aplicação consumidora.
 
 Três testes da API verificam autenticação, entradas inválidas, metadata, determinismo do
 fingerprint, vetores inválidos e timeout. Um teste de integração verifica a leitura da configuração
@@ -155,7 +156,7 @@ podem esperar a reconciliação; intervalo, duração da varredura e backlog inf
 pai com muitos registros dependentes pode tornar sua transação cara no modo trigger. Locks finais
 podem disputar acesso com a aplicação. Não há suporte a coleções, dependências encadeadas ou
 autorrelações. Polling observa o estado atual e não reconstrói todos os estados intermediários.
-Tarefas com falha continuam exigindo tratamento na #6.
+Tarefas com falha exigem reprocessamento administrativo explícito, entregue na #6.
 
 Sete testes novos verificam cursores, retomada, precisão, commits atrasados, concorrência,
 exclusão/reinserção, fan-out, rollback e privilégios de runtime em ParadeDB com inferência simulada.
@@ -163,12 +164,51 @@ O procedimento e a política de completude estão em
 [polling-dependencies.md](polling-dependencies.md). Não foram feitas medições de throughput,
 latência ou qualidade de recuperação para esta entrega.
 
+## Configurações e tarefas resilientes — issue #6
+
+O worker e a API passaram a compartilhar a classificação de falhas. Erros transitórios utilizam
+tentativas limitadas, backoff exponencial, jitter e Retry-After; autenticação, configuração,
+dimensão incompatível e outras falhas terminais interrompem as tentativas automáticas. Na fila, o
+próximo horário de tentativa e o orçamento da geração são persistidos. Na API, as tentativas ficam
+limitadas ao prazo total da requisição, sem enfileirar nem persistir consultas.
+
+O comando administrativo de reprocessamento seleciona tarefas com falha, registra o principal do
+banco e os diagnósticos sanitizados em uma trilha de ações e reinicia o orçamento para a geração
+mais recente. Mudanças no dado de origem não apagam automaticamente os diagnósticos de uma tarefa já
+falhada. Categorias de erro e status HTTP ficam disponíveis no estado da fila e nos logs
+estruturados; métricas acumuladas e dashboard continuam na #7.
+
+Configurações persistidas são imutáveis. Uma atualização prepara uma revisão candidata em destino
+novo; a revisão ativa continua disponível enquanto o candidato recebe backfill e processamento. A
+ativação explícita verifica conclusão, índice HNSW válido, fingerprints atuais e ausência de órfãos.
+Na mesma transação, desativa a revisão anterior, remove sua captura, invalida tokens e impede novos
+trabalhos antigos. A API passa a selecionar a revisão ativa e identificá-la nos metadados. O
+cancelamento de um candidato preserva a revisão ativa. Destinos anteriores não são removidos
+implicitamente.
+
+**Benefícios:** recuperação automática limitada para falhas transitórias; retomada de agendamentos
+após reinício; diagnóstico sanitizado e reprocessamento auditado; troca de modelo/dimensão com
+validação prévia; bloqueio de respostas antigas após ativação, incluindo workers já realizando
+inferência e pollers de revisões retiradas.
+
+**Custos e limites:** retries podem repetir computação e aumentar a carga. Revisões novas exigem
+outro destino e backfill, inclusive quando só parâmetros mudam; destinos antigos e ações
+administrativas consomem espaço até a política de retenção (#12). Ativação bloqueia escritas nas
+origens/dependências durante a validação completa e pode exigir janela de manutenção. A identidade
+das origens e relações é mantida; mudanças dessa identidade exigem outra entidade. Retorno a
+parâmetros anteriores após ativação exige nova preparação e atualização dos vetores; não há rollback
+imediato para um snapshot possivelmente desatualizado. Cancelamento não assegura interromper a
+computação no servidor de inferência.
+
+A suíte passou com 28 testes de integração em ParadeDB, incluindo quatro novos cenários de
+recuperação e revisões e um cenário HTTP pelo SDK real, com respostas 429 e 503 antes do sucesso.
+Dois testes adicionais cobrem classificação, delays, cancelamento e prazo da API. A inferência foi
+simulada nesta entrega: a verificação com modelo real permanece na #17. Não há medições novas de
+throughput, latência, custo dos locks ou qualidade semântica. Operação e permissões estão em
+[resilience.md](resilience.md).
+
 ## Melhorias pendentes e rastreabilidade
 
-- [#4](https://github.com/gkissel/local-embed/issues/4): API autenticada de geração de consulta, com
-  contrato OpenAPI e limites de entrada.
-- [#6](https://github.com/gkissel/local-embed/issues/6): classificação de falhas, retries limitados
-  com backoff e jitter, reprocessamento administrativo e versões imutáveis de configuração.
 - [#12](https://github.com/gkissel/local-embed/issues/12): retenção e limpeza da estrutura auxiliar.
   Reutilizar tarefas reduz crescimento por evento, mas não elimina crescimento por novos
   identificadores ou configurações.
@@ -199,5 +239,5 @@ As mitigações de polling e dependências foram registradas em
 [#20](https://github.com/gkissel/local-embed/issues/20) (invalidação com expansão assíncrona),
 [#21](https://github.com/gkissel/local-embed/issues/21) (coleções e caminhos explícitos) e
 [#22](https://github.com/gkissel/local-embed/issues/22) (avaliação de CDC). Falhas e reprocessamento
-permanecem na #6; as medições de custo e atraso foram acrescentadas à #10. Estes itens estão
-planejados, não implementados.
+foram entregues na #6; as medições de custo e atraso foram acrescentadas à #10. As mitigações
+#18–#22 estão planejadas, não implementadas.

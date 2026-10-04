@@ -1,4 +1,5 @@
 import { assertEquals } from '@std/assert';
+import { installRevisions } from '../services/admin/revisions.ts';
 import postgres from 'npm:postgres@3.4.7';
 import { ConfigurationStore, createHandler } from '../services/api/api.ts';
 import example from '../contracts/examples/localembed.v1.example.json' with { type: 'json' };
@@ -47,17 +48,26 @@ Deno.test({
       await sql.unsafe(
         'DROP SCHEMA IF EXISTS localembed CASCADE; CREATE SCHEMA localembed; CREATE TABLE localembed.configurations(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, configuration jsonb NOT NULL); CREATE ROLE localembed_query_test NOLOGIN; GRANT USAGE ON SCHEMA localembed TO localembed_query_test; GRANT SELECT ON localembed.configurations TO localembed_query_test',
       );
+      await sql.begin((tx) => installRevisions(tx));
+      await sql.unsafe('GRANT SELECT ON localembed.entity_revisions TO localembed_query_test');
       const config = structuredClone(example) as Configuration;
+      config.operations = { retries: { max_attempts: 1 } };
       config.providers[0].endpoint = `http://127.0.0.1:${mock.addr.port}`;
       config.providers[0].secret_env = 'LOCAL_EMBED_TEST_QUERY_KEY';
       await sql`INSERT INTO localembed.configurations(configuration) VALUES (${
         sql.json(config as unknown as postgres.JSONValue)
       })`;
+      await sql.unsafe(
+        "INSERT INTO localembed.entity_revisions(configuration_id, entity, state) VALUES(1, 'article', 'active')",
+      );
       const other = structuredClone(config);
       other.entities[0].name = 'other';
       await sql`INSERT INTO localembed.configurations(configuration) VALUES (${
         sql.json(other as unknown as postgres.JSONValue)
       })`;
+      await sql.unsafe(
+        "INSERT INTO localembed.entity_revisions(configuration_id, entity, state) VALUES(2, 'other', 'active')",
+      );
       const restricted = new URL(url);
       restricted.searchParams.set('options', '-c role=localembed_query_test');
       store = new ConfigurationStore(restricted.toString());
@@ -76,6 +86,9 @@ Deno.test({
       await sql`INSERT INTO localembed.configurations(configuration) VALUES (${
         sql.json(newer as unknown as postgres.JSONValue)
       })`;
+      await sql.unsafe(
+        "UPDATE localembed.entity_revisions SET state = 'retired' WHERE entity = 'article'; INSERT INTO localembed.entity_revisions(configuration_id, entity, state) VALUES(3, 'article', 'active')",
+      );
       const latest = await send(handler);
       assertEquals(latest.status, 200);
       assertEquals((await latest.json()).provider, 'newer_provider');
@@ -92,6 +105,9 @@ Deno.test({
         await sql`INSERT INTO localembed.configurations(configuration) VALUES (${
           sql.json(config as unknown as postgres.JSONValue)
         })`;
+        await sql.unsafe(
+          "UPDATE localembed.entity_revisions SET state = 'retired' WHERE entity = 'article'; INSERT INTO localembed.entity_revisions(configuration_id, entity, state) VALUES(4, 'article', 'active')",
+        );
         const real = await send(handler);
         assertEquals(real.status, 200);
         const embedding = (await real.json()).embedding;
