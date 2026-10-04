@@ -1,0 +1,5 @@
+{
+  "name": "@localembed/telemetry",
+  "exports": "./snapshot.ts",
+  "imports": { "postgres": "npm:postgres@3.4.7" }
+}

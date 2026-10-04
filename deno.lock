@@ -28,6 +28,7 @@
     "jsr:@std/yaml@^1.0.5": "1.1.0",
     "npm:@ai-sdk/openai@2": "2.0.133_zod@4.6.5",
     "npm:@apidevtools/swagger-parser@^12.1.0": "12.1.0_openapi-types@12.1.3",
+    "npm:@opentelemetry/api@1.9.0": "1.9.0",
     "npm:ai@5": "5.0.271_zod@4.6.5",
     "npm:ajv-formats@^3.0.1": "3.0.1_ajv@8.20.0",
     "npm:ajv@^8.20.0": "8.20.0",
@@ -617,6 +618,7 @@
     "dependencies": [
       "jsr:@std/assert@^1.0.16",
       "npm:@apidevtools/swagger-parser@^12.1.0",
+      "npm:@opentelemetry/api@1.9.0",
       "npm:ajv-formats@^3.0.1",
       "npm:ajv@^8.20.0"
     ],
@@ -632,6 +634,11 @@
         ]
       },
       "services/poller": {
+        "dependencies": [
+          "npm:postgres@3.4.7"
+        ]
+      },
+      "services/telemetry": {
         "dependencies": [
           "npm:postgres@3.4.7"
         ]

@@ -1,3 +1,4 @@
+import { event, span } from '../shared/telemetry.ts';
 import postgres from 'postgres';
 import {
   attemptLimit,
@@ -92,7 +93,10 @@ export class Worker {
   }
   abort(): void {
     this.stopped = true;
-    for (const execution of this.executions) execution.controller.abort('shutdown');
+    for (const execution of this.executions) {
+      event('execution_interrupted', { ...execution.context, reason: 'shutdown' });
+      execution.controller.abort('shutdown');
+    }
   }
   close(): Promise<void> {
     if (!this.closing) {
@@ -106,7 +110,7 @@ export class Worker {
   }
   tick(): Promise<boolean> {
     if (this.stopped) return Promise.resolve(false);
-    const operation = this.processOne();
+    const operation = span('worker.tick', { service: 'worker' }, () => this.processOne());
     this.active.add(operation);
     return operation.finally(() => this.active.delete(operation));
   }
@@ -121,14 +125,30 @@ export class Worker {
         AND EXISTS (SELECT 1 FROM localembed.entity_revisions v WHERE v.configuration_id = tasks.configuration_id AND v.entity = tasks.entity AND v.state IN ('active','staging'))
       ORDER BY requested_at, id FOR UPDATE SKIP LOCKED LIMIT 1
     ) UPDATE localembed.tasks t SET status = 'processing', attempts = CASE WHEN retry_generation <> generation THEN 1 ELSE attempts + 1 END, retry_generation = generation,
-      lease_token = ${token}::uuid,
+      lease_token = ${token}::uuid, execution_started_at = clock_timestamp(),
       execution_deadline = clock_timestamp() + ${maxExecutionMs} * interval '1 millisecond',
       lease_until = clock_timestamp() + ${
       Math.min(leaseSeconds * 1000, maxExecutionMs)
     } * interval '1 millisecond'
       FROM candidate c WHERE t.id = c.id RETURNING t.*`;
     if (!task) return false;
-    const lease = new Lease(sql, task.id, token, leaseSeconds, renewEveryMs, maxExecutionMs);
+    const context = {
+      service: 'worker' as const,
+      task_id: task.id,
+      entity: task.entity,
+      configuration_id: task.configuration_id,
+      generation: task.generation,
+    };
+    event('task_claimed', context);
+    const lease = new Lease(
+      sql,
+      task.id,
+      token,
+      leaseSeconds,
+      renewEveryMs,
+      maxExecutionMs,
+      context,
+    );
     this.executions.add(lease);
     if (this.stopped) lease.controller.abort('shutdown');
     let outcome = 'task_discarded';
@@ -156,7 +176,10 @@ export class Worker {
       );
       lease.signal.throwIfAborted();
       const vector = row && stored?.fingerprint !== hash
-        ? await cancellable(this.inference(provider, text, lease.signal), lease.signal)
+        ? await span('worker.provider', context, () => {
+          event('provider_call', context);
+          return cancellable(this.inference(provider, text, lease.signal), lease.signal);
+        })
         : null;
       if (
         vector &&
@@ -245,17 +268,7 @@ export class Worker {
       await lease.stop();
       this.executions.delete(lease);
     }
-    console.log(
-      JSON.stringify({
-        event: outcome,
-        task_id: task.id,
-        entity: task.entity,
-        configuration_id: task.configuration_id,
-        generation: task.generation,
-        error_code: errorCode,
-        provider_status: providerStatus,
-      }),
-    );
+    event(outcome, { ...context, error_code: errorCode, provider_status: providerStatus });
     return true;
   }
 }

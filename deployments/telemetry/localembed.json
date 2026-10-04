@@ -1,0 +1,478 @@
+{
+  "uid": "localembed-operations",
+  "title": "LocalEmbed operations",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "tags": [
+    "localembed"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Identifiers requiring work",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (entity, status) (localembed_queue_depth{status=~\"pending|processing|failed\"})",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "One reusable task per source identifier/revision; not source event history."
+    },
+    {
+      "id": 2,
+      "title": "Pending age and active execution age",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (entity, status) (localembed_queue_age_seconds)",
+          "refId": "A",
+          "legendFormat": "requested {{entity}} {{status}}"
+        },
+        {
+          "expr": "max by (entity, status) (localembed_execution_age_seconds)",
+          "refId": "B",
+          "legendFormat": "execution {{entity}} {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Requested-work age differs from execution start age. Check snapshot freshness."
+    },
+    {
+      "id": 3,
+      "title": "Captured root invalidations and enqueue requests",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (entity) (rate(localembed_captured_total[5m]))",
+          "refId": "A",
+          "legendFormat": "captured {{entity}}"
+        },
+        {
+          "expr": "sum by (entity) (rate(localembed_enqueued_total[5m]))",
+          "refId": "B",
+          "legendFormat": "enqueued {{entity}}"
+        },
+        {
+          "expr": "sum by (entity) (rate(localembed_coalesced_total[5m]))",
+          "refId": "C",
+          "legendFormat": "coalesced {{entity}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Trigger capture counts affected root requests, including dependency fan-out. Durable counters begin at telemetry migration."
+    },
+    {
+      "id": 4,
+      "title": "Task outcomes and retries",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (event) (rate(localembed_events_total{event=~\"task_processed|task_failed|task_discarded|task_requeued|task_retry_scheduled\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 5,
+      "title": "Provider calls",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (service, entity) (rate(localembed_events_total{event=\"provider_call\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 6,
+      "title": "Processing and provider latency p95",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, service, operation) (rate(localembed_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 7,
+      "title": "Leases and interruptions",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (event, reason) (rate(localembed_events_total{event=~\"lease_renewed|lease_lost|execution_interrupted\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 8,
+      "title": "Query responses and rejected authentication",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (event, status) (rate(localembed_events_total{service=\"query-api\",event=~\"query_response|authorization_rejected|query_failed|query_retry_scheduled\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Consumer is the shared service-key identity. Quotas/concurrency/cache instrumentation will arrive with #15/#16."
+    },
+    {
+      "id": 9,
+      "title": "Polling lag and reconciliation overdue",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (entity, configuration_id, __name__) ({__name__=~\"localembed_poll_cursor_lag_seconds|localembed_poll_window_lag_seconds|localembed_poll_reconcile_overdue_seconds\"})",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Timestamp lag is not guaranteed end-to-end synchronization latency. Uninitialized infinite cursors are omitted."
+    },
+    {
+      "id": 10,
+      "title": "Polling scans, changes and orphan observations",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (event, phase) (rate(localembed_events_total{event=~\"poll_scanned|poll_changed|poll_orphans|reconciliation_completed\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Observed attempts can include rolled-back batches; committed enqueue counters are authoritative."
+    },
+    {
+      "id": 11,
+      "title": "Reconciliation phase and progress",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (entity, configuration_id, phase, __name__) ({__name__=~\"localembed_poll_phase|localembed_poll_progress\"})",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Phase 0=source, 1=delete. Progress indicates a persisted cursor, not percentage of a changing source table."
+    },
+    {
+      "id": 12,
+      "title": "Process memory",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (job, instance, kind) (localembed_process_memory_bytes)",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 13,
+      "title": "Process CPU usage",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (job, instance) (rate(localembed_process_cpu_seconds[5m]))",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "CPU seconds accumulated per process; rates approximate core consumption."
+    },
+    {
+      "id": 14,
+      "title": "Snapshot freshness",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max(localembed_snapshot_age_seconds)",
+          "refId": "A",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "If this rises, queue/lag snapshots are stale. No data also means exporter missing."
+    },
+    {
+      "id": 15,
+      "title": "Sanitized lifecycle logs",
+      "type": "logs",
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "expr": "{service_name=~\"localembed-.+\"} | json",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 16,
+      "title": "Worker/query/poller traces",
+      "type": "text",
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Open **Explore \u2192 Tempo**, select Search, and filter by service `localembed-worker`, `localembed-query-api` or `localembed-poller`. Lifecycle logs carry `trace_id` for correlation. No content, vectors, source identifiers or credentials are included."
+      }
+    }
+  ]
+}

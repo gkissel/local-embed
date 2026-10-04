@@ -107,9 +107,10 @@ follow the [bounded retry policy](resilience.md).
 ## Runtime permissions and settings
 
 The poller role requires schema USAGE, SELECT on configurations, roots, dependencies and
-destinations, SELECT/INSERT/UPDATE on `localembed.polling_state` and `localembed.tasks`, USAGE on
-`localembed.tasks_id_seq`, and EXECUTE on `localembed.enqueue_task(bigint, text,
-text, text)` and
+destinations, SELECT/INSERT/UPDATE on `localembed.polling_state`, `localembed.tasks` and
+`localembed.enqueue_metrics`, USAGE on `localembed.tasks_id_seq`, and EXECUTE on
+`localembed.enqueue_task(bigint, text,
+text, text, text)` and
 `localembed.revision_eligible(bigint, text)`. It needs no source UPDATE or locking-helper execution
 privileges.
 

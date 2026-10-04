@@ -1,0 +1,51 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+    path: /ready
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  filter/localembed:
+    error_mode: ignore
+    traces:
+      span:
+        - 'instrumentation_scope.name != "localembed"'
+    metrics:
+      metric:
+        - 'instrumentation_scope.name != "localembed"'
+    logs:
+      log_record:
+        - 'not IsMatch(body, "^\\{\\\"event\\\":")'
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+exporters:
+  otlp_http/metrics:
+    endpoint: http://127.0.0.1:9090/api/v1/otlp
+  otlp_http/traces:
+    endpoint: http://127.0.0.1:4418
+  otlp_http/logs:
+    endpoint: http://127.0.0.1:3100/otlp
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/localembed, batch]
+      exporters: [otlp_http/traces]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/localembed, batch]
+      exporters: [otlp_http/metrics]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/localembed, batch]
+      exporters: [otlp_http/logs]

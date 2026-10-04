@@ -45,8 +45,8 @@ configurations with validation errors; existing entity updates use explicit stag
 with a fresh destination (see below). HNSW creation is deferred until initial backfill, as specified
 by the managed-storage ADR. Backfill and index creation are separate administrative commands. The
 trigger executes with the source writer's privileges; source writer roles need schema `USAGE`,
-`SELECT, INSERT, UPDATE` on `localembed.tasks`, `USAGE` on its identity sequence, and `EXECUTE` on
-`localembed.enqueue_task(bigint, text, text, text)` and
+`SELECT, INSERT, UPDATE` on `localembed.tasks` and `localembed.enqueue_metrics`, `USAGE` on its
+identity sequence, and `EXECUTE` on `localembed.enqueue_task(bigint, text, text, text, text)` and
 `localembed.revision_eligible(bigint, text)`.
 
 Run the database integration test against a disposable PostgreSQL 18 database with pgvector:
@@ -284,3 +284,13 @@ See [migration, runtime grants, retry policy, staging and rollback](docs/resilie
 existing installations requires stopping old runtimes, running `prepare-worker`, granting the new
 revision permissions and restarting. Old destinations are preserved; their eventual cleanup remains
 #12.
+
+## Operational telemetry
+
+The [telemetry setup](docs/telemetry.md) provisions Grafana, Prometheus, Loki and Tempo and
+instruments the worker, query API and poller with OpenTelemetry. Queue snapshots use a separate
+read-only database role; capture counters persist independently of reusable task rows.
+
+Existing installations must stop old runtimes, run `prepare-worker`, grant enqueue metrics
+permissions to source writers/pollers and restart with the new version. Telemetry export is opt-in
+through `OTEL_DENO=true`; use a unique `service.instance.id` for each process.
