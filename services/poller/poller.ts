@@ -30,6 +30,9 @@ export class Poller {
       for (const entity of config.entities) {
         if (entity.source.detection.mode !== 'polling') continue;
         await this.sql.begin(async (tx) => {
+          const eligible =
+            await tx`SELECT localembed.revision_eligible(${revision.id}, ${entity.name}) AS eligible`;
+          if (!eligible[0]?.eligible) return;
           await tx`INSERT INTO localembed.polling_state(configuration_id, entity) VALUES (${revision.id}, ${entity.name}) ON CONFLICT DO NOTHING`;
           const [state] =
             await tx`SELECT *, cursor_time::text AS time_text, window_end::text AS end_text,

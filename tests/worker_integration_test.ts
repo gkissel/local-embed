@@ -39,6 +39,10 @@ Deno.test({
       );
       await sql`INSERT INTO public.articles VALUES ('00000000-0000-0000-0000-000000000001', 'Initial', 'Body')`;
       await applyConfiguration(url, config, realEndpoint ? undefined : () => Promise.resolve());
+      // Simulate a pre-immutability installation for the legacy JSONB upgrade path.
+      await sql.unsafe(
+        'ALTER TABLE localembed.configurations DISABLE TRIGGER configurations_immutable',
+      );
       await sql`UPDATE localembed.configurations SET configuration = to_jsonb(configuration::text)`;
       await prepareWorker(url);
       const [upgraded] =

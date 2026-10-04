@@ -86,7 +86,10 @@ components:
           additionalProperties: false
           required: [config_version, fingerprint]
           properties:
-            config_version: { type: string, example: localembed/v1 }
+            config_version:
+              type: string
+              example: localembed/v1@2
+              description: Contract version and the active applied revision loaded for this request.
             fingerprint: { type: string, pattern: '^[a-f0-9]{64}$' }
     ErrorResponse:
       type: object

@@ -1,4 +1,11 @@
 import postgres from 'postgres';
+import {
+  attemptLimit,
+  classify,
+  ProcessingError,
+  retryDelay,
+  type RetryPolicy,
+} from '../shared/retry.ts';
 import { cancellable, Lease } from './lease.ts';
 import type { Configuration } from '../admin/apply.ts';
 
@@ -38,7 +45,7 @@ export async function fingerprint(
 export const generate: Generate = async (provider, text, signal) => {
   const [{ embed }, { createOpenAI }] = await Promise.all([import('ai'), import('@ai-sdk/openai')]);
   const key = Deno.env.get(provider.secret_env);
-  if (!key) throw new Error(`Missing environment variable ${provider.secret_env}`);
+  if (!key) throw new ProcessingError('provider_configuration');
   const baseURL = provider.endpoint.replace(/\/$/, '') + (provider.type === 'tei' ? '/v1' : '');
   const client = createOpenAI({ baseURL, apiKey: key });
   const { embedding } = await embed({
@@ -110,9 +117,10 @@ export class Worker {
     const { leaseSeconds, renewEveryMs, maxExecutionMs } = this.options;
     const [task] = await sql`WITH candidate AS (
       SELECT id FROM localembed.tasks
-      WHERE status = 'pending' OR (status = 'processing' AND lease_until < clock_timestamp())
+      WHERE ((status = 'pending' AND next_attempt_at <= clock_timestamp()) OR (status = 'processing' AND lease_until < clock_timestamp()))
+        AND EXISTS (SELECT 1 FROM localembed.entity_revisions v WHERE v.configuration_id = tasks.configuration_id AND v.entity = tasks.entity AND v.state IN ('active','staging'))
       ORDER BY requested_at, id FOR UPDATE SKIP LOCKED LIMIT 1
-    ) UPDATE localembed.tasks t SET status = 'processing', attempts = attempts + 1,
+    ) UPDATE localembed.tasks t SET status = 'processing', attempts = CASE WHEN retry_generation <> generation THEN 1 ELSE attempts + 1 END, retry_generation = generation,
       lease_token = ${token}::uuid,
       execution_deadline = clock_timestamp() + ${maxExecutionMs} * interval '1 millisecond',
       lease_until = clock_timestamp() + ${
@@ -124,10 +132,15 @@ export class Worker {
     this.executions.add(lease);
     if (this.stopped) lease.controller.abort('shutdown');
     let outcome = 'task_discarded';
+    let policy: RetryPolicy = {};
+    let errorCode: string | undefined;
+    let providerStatus: number | undefined;
     try {
       const [revision] =
         await sql`SELECT configuration FROM localembed.configurations WHERE id = ${task.configuration_id}`;
       const config = revision.configuration as Configuration;
+      policy = config.operations?.retries ?? {};
+      if (task.attempts > attemptLimit(policy)) throw new ProcessingError('retry_exhausted');
       const entity = config.entities.find((e) => e.name === task.entity)!;
       const provider = config.providers.find((p) => p.name === entity.provider)!;
       const idType =
@@ -149,9 +162,12 @@ export class Worker {
         vector &&
         (vector.length !== provider.dimensions ||
           !vector.every((n) => typeof n === 'number' && Number.isFinite(n)))
-      ) throw new Error('Provider returned invalid embedding dimensions or values');
+      ) throw new ProcessingError('invalid_embedding');
       lease.signal.throwIfAborted();
       await sql.begin(async (tx) => {
+        const eligible =
+          await tx`SELECT localembed.revision_eligible(${task.configuration_id}, ${task.entity}) AS eligible`;
+        if (!eligible[0]?.eligible) return;
         // Source writers lock the source before enqueueing. Follow the same order
         // so an update cannot deadlock with the worker's final transaction.
         const current = await readContent(tx, entity, task.source_id, true);
@@ -163,7 +179,7 @@ export class Worker {
             AND lease_until > clock_timestamp() AND execution_deadline > clock_timestamp() FOR UPDATE`;
         if (!owned || lease.signal.aborted) return;
         if (owned.generation !== task.generation || currentHash !== hash) {
-          await tx`UPDATE localembed.tasks SET status = 'pending', requested_at = clock_timestamp(), lease_until = NULL, lease_token = NULL, execution_deadline = NULL WHERE id = ${task.id}`;
+          await tx`UPDATE localembed.tasks SET status = 'pending', attempts = 0, retry_generation = generation, next_attempt_at = clock_timestamp(), requested_at = clock_timestamp(), lease_until = NULL, lease_token = NULL, execution_deadline = NULL WHERE id = ${task.id}`;
           outcome = 'task_requeued';
           return;
         }
@@ -187,14 +203,14 @@ export class Worker {
             [task.source_id],
           );
           if (present?.fingerprint !== hash) {
-            await tx`UPDATE localembed.tasks SET status = 'pending', requested_at = clock_timestamp(), lease_until = NULL, lease_token = NULL, execution_deadline = NULL WHERE id = ${task.id}`;
+            await tx`UPDATE localembed.tasks SET status = 'pending', attempts = 0, retry_generation = generation, next_attempt_at = clock_timestamp(), requested_at = clock_timestamp(), lease_until = NULL, lease_token = NULL, execution_deadline = NULL WHERE id = ${task.id}`;
             outcome = 'task_requeued';
             return;
           }
         }
         const completed =
           await tx`UPDATE localembed.tasks SET status = 'done', processed_generation = generation,
-          lease_until = NULL, lease_token = NULL, execution_deadline = NULL, last_error = NULL
+          lease_until = NULL, lease_token = NULL, execution_deadline = NULL, last_error = NULL, error_code = NULL, provider_status = NULL
           WHERE id = ${task.id} AND lease_token = ${token}::uuid
             AND lease_until > clock_timestamp() AND execution_deadline > clock_timestamp() RETURNING id`;
         if (!completed.length || lease.signal.aborted) {
@@ -202,21 +218,44 @@ export class Worker {
         }
         outcome = 'task_processed';
       });
-    } catch {
-      // A newer generation must survive failures in processing the older one.
+    } catch (cause) {
+      const failure = classify(cause);
+      errorCode = lease.signal.aborted ? 'execution_interrupted' : failure.code;
+      providerStatus = failure.status;
+      const retry = failure.retryable && task.attempts < attemptLimit(policy);
+      const delay = retryDelay(task.attempts, failure, policy);
       const rows = await sql`UPDATE localembed.tasks SET
-        status = CASE WHEN generation <> ${task.generation} OR ${lease.signal.aborted} THEN 'pending' ELSE 'failed' END,
-        requested_at = clock_timestamp(),
-        last_error = ${lease.signal.aborted ? 'execution interrupted' : 'processing failed'},
+        status = CASE WHEN generation <> ${task.generation} OR ${lease.signal.aborted} OR ${retry} THEN 'pending' ELSE 'failed' END,
+        attempts = CASE WHEN generation <> ${task.generation} THEN 0 ELSE attempts END,
+        retry_generation = generation,
+        next_attempt_at = CASE WHEN generation <> ${task.generation} OR ${lease.signal.aborted} THEN clock_timestamp()
+          ELSE clock_timestamp() + ${delay} * interval '1 millisecond' END,
+        requested_at = clock_timestamp(), last_error = ${errorCode}, error_code = ${errorCode}, provider_status = ${
+        providerStatus ?? null
+      },
         lease_until = NULL, lease_token = NULL, execution_deadline = NULL
         WHERE id = ${task.id} AND lease_token = ${token}::uuid AND status = 'processing' RETURNING status`;
-      outcome = rows[0]?.status === 'failed' ? 'task_failed' : 'task_requeued';
+      outcome = rows[0]?.status === 'failed'
+        ? 'task_failed'
+        : retry
+        ? 'task_retry_scheduled'
+        : 'task_requeued';
       if (!rows.length) outcome = 'task_discarded';
     } finally {
       await lease.stop();
       this.executions.delete(lease);
     }
-    console.log(JSON.stringify({ event: outcome, task_id: task.id, entity: task.entity }));
+    console.log(
+      JSON.stringify({
+        event: outcome,
+        task_id: task.id,
+        entity: task.entity,
+        configuration_id: task.configuration_id,
+        generation: task.generation,
+        error_code: errorCode,
+        provider_status: providerStatus,
+      }),
+    );
     return true;
   }
 }

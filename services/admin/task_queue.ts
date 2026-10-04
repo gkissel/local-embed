@@ -20,6 +20,10 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS last_error text;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS lease_token uuid;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS execution_deadline timestamptz;
+    ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz NOT NULL DEFAULT now();
+    ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS retry_generation bigint NOT NULL DEFAULT 1;
+    ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS error_code text;
+    ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS provider_status integer;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS requested_at timestamptz NOT NULL DEFAULT now();`);
   const [installed] = await tx`SELECT to_regclass('localembed.tasks_key') AS installed`;
   if (!installed.installed) {
@@ -48,15 +52,22 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
     `CREATE INDEX IF NOT EXISTS tasks_ready ON localembed.tasks (requested_at, id) WHERE status IN ('pending', 'processing');
     DROP INDEX IF EXISTS localembed.tasks_available;
     CREATE OR REPLACE FUNCTION localembed.enqueue_task(revision bigint, entity_name text, identifier text, change_operation text)
-    RETURNS void LANGUAGE sql AS $enqueue$
+    RETURNS void LANGUAGE plpgsql AS $enqueue$
+    BEGIN
+      IF NOT localembed.revision_eligible(revision, entity_name) THEN RETURN; END IF;
       INSERT INTO localembed.tasks(configuration_id, entity, source_id, operation)
       VALUES (revision, entity_name, identifier, change_operation)
       ON CONFLICT(configuration_id, entity, source_id) DO UPDATE SET
         generation = localembed.tasks.generation + 1,
         operation = EXCLUDED.operation, requested_at = clock_timestamp(),
+        next_attempt_at = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.next_attempt_at ELSE clock_timestamp() END,
+        retry_generation = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.retry_generation ELSE localembed.tasks.generation + 1 END,
         status = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.status ELSE 'pending' END,
         attempts = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.attempts ELSE 0 END,
-        last_error = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.last_error ELSE NULL END
+        error_code = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.error_code ELSE NULL END,
+        provider_status = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.provider_status ELSE NULL END,
+        last_error = CASE WHEN localembed.tasks.status = 'failed' THEN localembed.tasks.last_error ELSE NULL END;
+    END;
     $enqueue$;`,
   );
 }
@@ -65,8 +76,11 @@ export async function installCapture(
   tx: postgres.TransactionSql,
   entity: Configuration['entities'][number],
   revision: string | number,
+  namespaced = false,
+  entityIndex = 0,
 ): Promise<void> {
-  const fn = table(`localembed.capture_${entity.name}`);
+  const captureName = namespaced ? `r${revision}_e${entityIndex}` : entity.name;
+  const fn = table(`localembed.capture_${captureName}`);
   const id = quote(entity.source.id.column);
   const idType =
     { uuid: 'uuid', bigint: 'bigint', text: 'text', ulid: 'text' }[entity.source.id.type];
@@ -124,11 +138,11 @@ export async function installCapture(
       END IF;
       RETURN OLD;
     END $capture$;
-    DROP TRIGGER IF EXISTS ${quote(`localembed_${entity.name}`)} ON ${table(entity.source.table)};
-    CREATE TRIGGER ${quote(`localembed_${entity.name}`)} AFTER INSERT OR UPDATE OR DELETE
+    DROP TRIGGER IF EXISTS ${quote(`localembed_${captureName}`)} ON ${table(entity.source.table)};
+    CREATE TRIGGER ${quote(`localembed_${captureName}`)} AFTER INSERT OR UPDATE OR DELETE
       ON ${table(entity.source.table)} FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
   for (const [index, dep] of (entity.dependencies ?? []).entries()) {
-    const depFn = table(`localembed.capture_dep_${entity.name}_${index}`);
+    const depFn = table(`localembed.capture_dep_${captureName}_${index}`);
     const targetId = quote(dep.target.id.column);
     const foreign = quote(dep.source_column);
     const fields = [...new Set([dep.target.id.column, ...dep.fields])];
@@ -155,13 +169,35 @@ export async function installCapture(
         IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;
       END $dep$;
-      DROP TRIGGER IF EXISTS ${quote(`le_dep_${entity.name}_${index}`)} ON ${
+      DROP TRIGGER IF EXISTS ${quote(`le_dep_${captureName}_${index}`)} ON ${
       table(dep.target.table)
     };
       CREATE TRIGGER ${
-      quote(`le_dep_${entity.name}_${index}`)
+      quote(`le_dep_${captureName}_${index}`)
     } AFTER INSERT OR UPDATE OR DELETE ON ${
       table(dep.target.table)
     } FOR EACH ROW EXECUTE FUNCTION ${depFn}()`);
+  }
+}
+
+/** Remove only capture objects, retaining destinations/history and shared locking helpers. */
+export async function removeCapture(
+  tx: postgres.TransactionSql,
+  entity: Configuration['entities'][number],
+  revision: string | number,
+  namespaced: boolean,
+  entityIndex: number,
+): Promise<void> {
+  if (entity.source.detection.mode === 'polling') return;
+  const name = namespaced ? `r${revision}_e${entityIndex}` : entity.name;
+  await tx.unsafe(
+    `DROP TRIGGER IF EXISTS ${quote(`localembed_${name}`)} ON ${table(entity.source.table)};
+    DROP FUNCTION IF EXISTS ${table(`localembed.capture_${name}`)}()`,
+  );
+  for (const [index, dep] of (entity.dependencies ?? []).entries()) {
+    await tx.unsafe(
+      `DROP TRIGGER IF EXISTS ${quote(`le_dep_${name}_${index}`)} ON ${table(dep.target.table)};
+      DROP FUNCTION IF EXISTS ${table(`localembed.capture_dep_${name}_${index}`)}()`,
+    );
   }
 }

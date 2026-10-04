@@ -377,7 +377,8 @@ Deno.test({
     fixture(async ({ sql, worker }) => {
       await sql.unsafe(`CREATE ROLE localembed_test_worker LOGIN PASSWORD 'test-worker-only';
       GRANT USAGE ON SCHEMA public, localembed TO localembed_test_worker;
-      GRANT SELECT ON public.articles, localembed.configurations TO localembed_test_worker;
+      GRANT SELECT ON public.articles, localembed.configurations, localembed.entity_revisions TO localembed_test_worker;
+      GRANT EXECUTE ON FUNCTION localembed.revision_eligible(bigint, text) TO localembed_test_worker;
       GRANT SELECT, UPDATE ON localembed.tasks TO localembed_test_worker;
       GRANT SELECT, INSERT, UPDATE, DELETE ON localembed.article_embeddings TO localembed_test_worker;
       GRANT EXECUTE ON FUNCTION localembed.lock_source_article(text) TO localembed_test_worker`);

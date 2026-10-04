@@ -41,12 +41,13 @@ those triggers. Changes to source identifiers enqueue deletion of the old identi
 
 The administrative command supports new entities using trigger or polling detection, including
 explicit many-to-one content dependencies. It rejects existing destinations and unsupported
-configurations with validation errors; updating applied configurations remains issue #6. HNSW
-creation is deferred until initial backfill, as specified by the managed-storage ADR. Backfill and
-index creation are separate administrative commands. The trigger executes with the source writer's
-privileges; source writer roles need schema `USAGE`, `SELECT, INSERT, UPDATE` on `localembed.tasks`,
-`USAGE` on its identity sequence, and `EXECUTE` on
-`localembed.enqueue_task(bigint, text, text, text)`.
+configurations with validation errors; existing entity updates use explicit staging and activation
+with a fresh destination (see below). HNSW creation is deferred until initial backfill, as specified
+by the managed-storage ADR. Backfill and index creation are separate administrative commands. The
+trigger executes with the source writer's privileges; source writer roles need schema `USAGE`,
+`SELECT, INSERT, UPDATE` on `localembed.tasks`, `USAGE` on its identity sequence, and `EXECUTE` on
+`localembed.enqueue_task(bigint, text, text, text)` and
+`localembed.revision_eligible(bigint, text)`.
 
 Run the database integration test against a disposable PostgreSQL 18 database with pgvector:
 
@@ -94,15 +95,17 @@ content, and update one destination row per source identifier. A SHA-256 fingerp
 rendered content and generation parameters. Unchanged fingerprints skip inference. Before writing,
 the worker checks its lease ownership and verifies the source content again; a change during
 inference requeues the task. Expired leases can be acquired by another replica. Processing failures
-retain a failed task; retry classification and administrative reprocessing belong to issue #6.
-Workers log task identifiers and lifecycle outcomes without content or vectors.
+schedule transient retries persistently; terminal or exhausted failures require explicit
+administrative reprocessing. See [retry and revision operations](docs/resilience.md). Workers log
+task identifiers and lifecycle outcomes without content or vectors.
 
-The worker role needs `SELECT` on source tables and configurations, `SELECT, UPDATE` on tasks, and
-`SELECT, INSERT, UPDATE, DELETE` on entity destinations, schema `USAGE`, and `EXECUTE` on the
-entity-specific `localembed.lock_source_<entity>(text)` function. This fixed locking-read function
-uses the administrative owner with a fixed search path; PUBLIC execution is revoked. Grant it only
-to the trusted worker role so it can lock source rows without UPDATE permission on source tables.
-For the reference article entity:
+The worker role needs `SELECT` on source tables, configurations and `localembed.entity_revisions`,
+`SELECT, UPDATE` on tasks, and `SELECT, INSERT, UPDATE, DELETE` on entity destinations, schema
+`USAGE`, and `EXECUTE` on the entity-specific `localembed.lock_source_<entity>(text)` function and
+`localembed.revision_eligible(bigint, text)`. This fixed locking-read function uses the
+administrative owner with a fixed search path; PUBLIC execution is revoked. Grant it only to the
+trusted worker role so it can lock source rows without UPDATE permission on source tables. For the
+reference article entity:
 `GRANT EXECUTE ON FUNCTION localembed.lock_source_article(text)
 TO localembed_worker`. Backfill,
 worker preparation, and index creation use the administrative role. Normal worker startup executes
@@ -162,7 +165,7 @@ task. Relevant changes increment a durable generation counter instead of appendi
 change during inference preserves the active reservation and advances the requested generation; the
 worker discards the old result and leaves the latest generation pending. Completed task rows are
 reused on subsequent changes. Failed tasks remain failed, with their error context preserved even if
-newer source changes arrive, until administrative reprocessing from issue #6. The queue represents
+newer source changes arrive, until explicit administrative reprocessing. The queue represents
 synchronization state rather than a history of every source update.
 
 Workers reserve different identifiers independently. Each execution has a UUID token, an expiring
@@ -184,15 +187,17 @@ The provider request also has a 30-second timeout. A server already computing a 
 may continue its work, and a crash after receiving a vector but before committing can still cause
 repeat inference. Source updates and final writes briefly contend on the source row; final writes
 lock the source before the task to follow the trigger's lock order. Relevant changes still write
-queue state, and renewals add a write each interval. Queue retention, retry policy, configuration
-updates and concurrent HNSW construction remain issues #12, #6 and #13.
+queue state, and renewals add a write each interval. Queue retention and concurrent HNSW
+construction remain issues #12 and #13. Revision activation and retry operations are described
+below.
 
 See [the reproducible queue workload comparison](docs/queue-coordination.md).
 
 ## Query embedding API
 
 Run the API with a separate, randomly generated service key. The API database role needs only
-`USAGE` on schema `localembed` and `SELECT` on `localembed.configurations`:
+`USAGE` on schema `localembed` and `SELECT` on `localembed.configurations` and
+`localembed.entity_revisions`:
 
 ```sh
 export DATABASE_URL=postgres://localembed_api:password@localhost/localembed
@@ -213,20 +218,21 @@ curl http://127.0.0.1:8090/v1/embeddings \
   -d '{"entity":"article","input":"query: Como funciona a sincronização incremental?"}'
 ```
 
-Only applied entities are available. For an entity, the API reads the latest applied configuration
-containing that entity, uses its provider and model, and returns `embedding`, `dimensions`, `model`,
-`provider` and generation metadata. It never searches, reads source rows, enqueues tasks or persists
-query text. The input is sent verbatim: include the reference E5 `query:` prefix yourself; source
-content uses the independent `passage:` entity template. The returned fingerprint combines query
-text and the entity's generation parameters; it does not identify a source row.
+Only applied entities are available. For an entity, the API reads the active applied revision for
+that entity, uses its provider and model, and returns `embedding`, `dimensions`, `model`, `provider`
+and generation metadata. It never searches, reads source rows, enqueues tasks or persists query
+text. The input is sent verbatim: include the reference E5 `query:` prefix yourself; source content
+uses the independent `passage:` entity template. The returned fingerprint combines query text and
+the entity's generation parameters; it does not identify a source row.
 
 Requests must have exactly `entity` and `input`, use JSON, contain 1–32768 Unicode characters of
 input, and fit within 262144 body bytes, including streamed bodies. Authentication happens before
 configuration access or inference. Invalid requests return 400, invalid credentials 401, unapplied
 entities 404, and configuration/provider failures 503 with sanitized errors. Provider vectors must
 have the configured dimension and finite numeric values. Inference has a 30-second timeout and
-observes request cancellation. There is no query cache, per-consumer quota, or automatic retry in
-this version; deployments sharing a service key share access to all applied entities.
+observes request cancellation. Transient retries share the request deadline. There is no query cache
+or per-consumer quota in this version; deployments sharing a service key share access to all applied
+entities.
 
 `deno task test` checks validation, authentication, metadata, invalid provider output and timeout.
 The API integration test runs with the other scenarios via `deno task test:integration`, exercising
@@ -258,4 +264,23 @@ to affected roots. Workers recheck root and dependency content before committing
 See [setup, correctness policy, permissions and tradeoffs](docs/polling-dependencies.md) and the
 [validated configuration example](contracts/examples/localembed.polling.example.json). Polling
 trades periodic database reads and eventual detection for operation without consumer capture
-triggers. Configuration updates and failed-task reprocessing remain #6.
+triggers. Existing entity changes use staged revisions; failed tasks can be reprocessed explicitly.
+
+## Revisions and failure recovery
+
+New entities use `migrate`; update an existing entity through `stage replacement.json`, a fresh
+managed destination, backfill, worker processing, `build-indexes` and `activate <revision>`.
+`cancel <revision>` abandons a staged candidate without changing the active revision. Configuration
+JSON is immutable; the API selects the active revision and returns metadata such as
+`localembed/v1@2`. Activation verifies the candidate and fences old workers and pollers atomically.
+It is a maintenance operation that blocks source writes during verification.
+
+Transient failures use persistent bounded retries with exponential backoff, jitter and Retry-After.
+Terminal/exhausted failures remain inspectable until an administrator runs
+`deno task localembed reprocess <revision> <entity> [source-id]`. Reprocessing is audited and uses
+the latest requested generation. Query retries run synchronously under the request deadline.
+
+See [migration, runtime grants, retry policy, staging and rollback](docs/resilience.md). Upgrading
+existing installations requires stopping old runtimes, running `prepare-worker`, granting the new
+revision permissions and restarting. Old destinations are preserved; their eventual cleanup remains
+#12.

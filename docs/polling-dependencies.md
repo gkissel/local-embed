@@ -2,7 +2,7 @@
 
 Issue #5 adds a poller and explicit relations to the existing persistent queue. Administrative
 migration creates the required objects; runtime startup executes no DDL. New entities may select
-`trigger` or `polling`. Updating an already applied entity remains #6.
+`trigger` or `polling`. Existing entity updates use [staging and activation](resilience.md).
 
 ## Reference configuration
 
@@ -77,9 +77,9 @@ detected by these source sweeps even when the root's timestamp did not change.
 Pending or processing tasks already have recoverable work and are not repeatedly enqueued by
 polling. Workers read current content and recheck it before committing, so changes during successful
 inference cause stale results to be discarded and retried. Failed tasks retain their diagnostics and
-require the administrative reprocessing planned in #6. Polling does not turn failed tasks into
-pending tasks automatically. It synchronizes surviving current state; it cannot reconstruct every
-intermediate value or rows inserted and deleted between observations.
+require explicit [administrative reprocessing](resilience.md). Polling does not turn failed tasks
+into pending tasks automatically. It synchronizes surviving current state; it cannot reconstruct
+every intermediate value or rows inserted and deleted between observations.
 
 Physical deletion is eventually detected by the orphan phase. The worker rereads the source before
 deletion, so a reinserted identifier is processed rather than blindly removed. Convergence requires
@@ -101,19 +101,21 @@ and identifier. Fixed SECURITY DEFINER helpers with a `pg_catalog` search path p
 without granting UPDATE on source or dependency tables; PUBLIC execution is revoked. These locks can
 briefly contend with consumer writes. PostgreSQL
 [documents row-lock behavior](https://www.postgresql.org/docs/18/explicit-locking.html). Normal
-consumer transactions can still create deadlocks through their own lock ordering; provider retry
-policy and richer task error handling remain #6.
+consumer transactions can still create deadlocks through their own lock ordering; transient failures
+follow the [bounded retry policy](resilience.md).
 
 ## Runtime permissions and settings
 
 The poller role requires schema USAGE, SELECT on configurations, roots, dependencies and
 destinations, SELECT/INSERT/UPDATE on `localembed.polling_state` and `localembed.tasks`, USAGE on
 `localembed.tasks_id_seq`, and EXECUTE on `localembed.enqueue_task(bigint, text,
-text, text)`. It
-needs no source UPDATE or locking-helper execution privileges.
+text, text)` and
+`localembed.revision_eligible(bigint, text)`. It needs no source UPDATE or locking-helper execution
+privileges.
 
-The worker retains its existing task/destination privileges and SELECT on dependency tables. Grant
-locking helpers only to its trusted role. For this example:
+The worker retains its existing task/destination privileges and SELECT on dependency tables and
+revision metadata, plus EXECUTE on `localembed.revision_eligible(bigint, text)`. Grant locking
+helpers only to its trusted role. For this example:
 
 ```sql
 GRANT EXECUTE ON FUNCTION localembed.lock_source_product(text),
