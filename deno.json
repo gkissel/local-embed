@@ -14,7 +14,7 @@
     "@opentelemetry/api": "npm:@opentelemetry/api@1.9.0"
   },
   "tasks": {
-    "check": "deno fmt --check deno.json mod.ts README.md contracts services scripts examples deployments/runtime docs/site tests && deno lint services scripts examples deployments/runtime docs/site tests && deno check scripts/prepare_docs.ts scripts/validate_contracts.ts docs/site/_config.ts tests/contracts_test.ts services/admin/main.ts services/worker/main.ts scripts/measure_queue.ts scripts/measure_retention.ts scripts/measure_indexes.ts services/api/main.ts services/poller/main.ts services/telemetry/main.ts scripts/verify_telemetry.ts examples/hybrid-search/main.ts examples/hybrid-search/setup.ts scripts/compare_hybrid_storage.ts deployments/runtime/bootstrap.ts deployments/runtime/probe.ts scripts/deployment/smoke.ts",
+    "check": "deno fmt --check deno.json mod.ts README.md contracts services scripts examples deployments/runtime docs/site tests && deno lint services scripts examples deployments/runtime docs/site tests && deno check scripts/prepare_docs.ts scripts/validate_contracts.ts docs/site/_config.ts tests/contracts_test.ts services/admin/main.ts services/worker/main.ts scripts/measure_queue.ts scripts/measure_retention.ts scripts/measure_indexes.ts scripts/evaluation/run.ts services/api/main.ts services/poller/main.ts services/telemetry/main.ts scripts/verify_telemetry.ts examples/hybrid-search/main.ts examples/hybrid-search/setup.ts scripts/compare_hybrid_storage.ts deployments/runtime/bootstrap.ts deployments/runtime/probe.ts scripts/deployment/smoke.ts",
     "validate:contracts": "deno run --allow-read --allow-net --allow-env scripts/validate_contracts.ts",
     "docs:prepare": "deno run --allow-read --allow-write scripts/prepare_docs.ts",
     "docs:build": "deno task docs:prepare && deno task --cwd docs/site build",
@@ -33,7 +33,8 @@
     "verify:deployment:tei": "deno run --allow-read=deployments/.secrets/service_key --allow-env --allow-net scripts/deployment/smoke.ts",
     "measure:retention": "deno run --allow-read --allow-write --allow-env --allow-net scripts/measure_retention.ts",
     "demo:compare": "deno run --allow-read --allow-write --allow-env --allow-net scripts/compare_hybrid_storage.ts",
-    "measure:indexes": "deno run --allow-read --allow-write --allow-env --allow-net scripts/measure_indexes.ts"
+    "measure:indexes": "deno run --allow-read --allow-write --allow-env --allow-net scripts/measure_indexes.ts",
+    "evaluate": "scripts/evaluation/run.sh"
   },
   "fmt": {
     "lineWidth": 100,

@@ -312,3 +312,10 @@ for the pinned ParadeDB, LocalEmbed roles, TEI and telemetry environment. The sa
 through [the Helm chart](deployments/helm/localembed). See
 [deployment operation and verification](docs/deployment.md) for credentials, administration, custom
 configuration, production boundaries and real-provider checks.
+
+## Artifact evaluation
+
+Run `deno task evaluate` for the [reproducible real-TEI baseline](docs/artifact-evaluation.md). It
+uses disposable pinned Docker services, synthetic and archived public data, and writes workload,
+latency, failure/retry, queue, PostgreSQL and sampled resource evidence. Extended comparisons remain
+separate from this small functional baseline.

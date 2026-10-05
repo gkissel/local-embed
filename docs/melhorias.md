@@ -483,3 +483,57 @@ verifica recuperação por uma nova execução.
 **Validação final:** check estático passou; a imagem runtime foi reconstruída e executou
 `admin build-indexes --concurrently` no ParadeDB real. Os testes desta entrega não acrescentam
 validação TEI/GPU/Kubernetes; essas evidências permanecem nas issues específicas.
+
+### Pesquisa de mitigações após #13
+
+A pesquisa com fontes oficiais PostgreSQL 18 e pgvector v0.8.1 está em
+[research/index-operation-mitigations.md](research/index-operation-mitigations.md). Limitar CPU e
+memória do container administrativo não controla os recursos consumidos pelo backend SQL.
+Memória de manutenção, paralelismo, shared memory e concorrência real devem caber no orçamento do
+PostgreSQL, preservando capacidade para consultas e workers (#10/#27).
+
+Monitorar fase do índice, lockers e idade de transações/snapshots; distinguir timeout de instrução,
+lock e transação ociosa. Cancelar só o backend identificado e validar recuperação (#27). O protocolo
+administrativo por recurso da #30 precisa coordenar build/activate/cancel/retention, mantendo posse
+na sessão física; retirar o lock global sem esse protocolo cria corridas com DROP e ponteiros.
+A #23 pré-valida e verifica delta durável sob fence final curto, incluindo deletes, dependências e
+commits tardios; ID sequencial não é watermark de commit. Não há promessa de ativação sem bloqueio.
+
+### #10 — baseline de avaliação reproduzível com TEI real
+
+**O que mudou:** `deno task evaluate` prepara banco/TEI isolados com imagens/revisão fixadas, usa
+16 fontes sintéticas, 12 registros públicos USGS arquivados e quatro fontes polling, executa nove
+cenários e publica relatório JSON com amostras brutas. Registra configuração, imagens, host, hashes
+do harness/dados, percentis e definição de latência, throughput de tarefas, fila, captura,
+retries/falhas, leases, snapshot, consulta, HNSW, WAL observado e limpeza. Verifica fingerprints e
+768 dimensões para os 31 embeddings restantes. Defaults de experimento não alteram produção.
+
+**Positivos:** evidência real do modelo, repetição do workload sem depender de um feed público
+mutável, duas falhas injetadas separadas de erros naturais, conservação de counters comprovada após
+limpeza de 32 tarefas, recursos do banco/TEI medidos separadamente e artefatos auditáveis. Wrapper
+recusa containers existentes e banco ocupado e remove somente seu ambiente descartável.
+
+**Negativos:** workload pequeno, uma baseline por relatório e poucas amostras de recursos; não
+estima capacidade de produção nem qualidade semântica. Admin/workers/poller/API/snapshot compartilham
+um processo, sem custo por papel individual. Latência é requested-to-completed da última geração;
+coalescência omite versões intermediárias e polling pré-captura não entra nessa métrica. WAL é
+assíncrono/global; picos de memória são amostrados. Aquecimento/download não integram as fases.
+TEI continua consumindo recursos e depende de modelo/cache/rede no preparo.
+
+**Escopo ampliado preservado:** comparações com mais dados, amostras repetidas, carga concorrente,
+recursos por papel, recall/layout 768D, cache/quotas, polling/dependências e telemetria ficam na #31,
+com dependências nativas para funcionalidades ainda não implementadas. Os requisitos de medição
+acumulados na #10 foram movidos integralmente para essa fase; não foram tratados como benchmarks
+já executados. A baseline mede o comportamento atual, não entrega essas otimizações.
+
+**Evidência:** nove cenários e 75 tentativas registradas, duas falhas intencionalmente injetadas e
+zero falhas naturais observadas nessa execução. A avaliação verificou 31 embeddings atualizados,
+renovação de lease e exclusão via reconciliação; seis consultas reais e dez snapshots foram medidos.
+41 integrações e 12 testes comuns passaram, além dos checks estáticos. Dados e limites em
+[artifact-evaluation.md](artifact-evaluation.md); resultados em
+[evaluation/artifact-summary.md](evaluation/artifact-summary.md).
+
+**Checagem de preparo:** o servidor PostgreSQL temporário da inicialização pode responder por
+socket Unix antes de o servidor final estar pronto. O driver exige SELECT via TCP autenticado,
+além da saúde do TEI. Testes de recusa preservaram container existente e uma tabela não relacionada
+em banco ocupado, sem criar o schema gerenciado.
