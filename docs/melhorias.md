@@ -378,3 +378,62 @@ secrets; newline em secret utilizado como variável de ambiente invalidava a aut
 `GF_*__FILE` não é processado pelo entrypoint do bundle LGTM. Corrigimos montagem/leitura,
 normalização e inicialização explícita da senha. Esses problemas só apareceram ao executar os
 ambientes reais, não no lint dos manifests. Operação e limites em [deployment.md](deployment.md).
+
+### Mitigações operacionais após #9
+
+Reduzir consumo começa pelas medições da #10: separar aquecimento do modelo de operação contínua,
+ajustar réplicas, batches e concorrência e permitir desligar o dashboard local. A #26 trata
+frequência adaptativa de snapshot/export e volume de logs, preservando freshness e os filtros de
+conteúdo seguro.
+
+SIGTERM e prazo de encerramento mitigam perdas nos buffers; monitoração de disco e rejeição de fila
+revela falhas de persistência. Para eventos críticos não cobertos por admin_actions/counters
+existentes, a #12 define classificação e eventual outbox transacional com confirmação/reenvio
+idempotente e retenção limitada. Não há garantia universal de entrega nem intenção de persistir todo
+log.
+
+A #27 valida a substituição do LGTM por backends separados/gerenciados, persistência, retenção e
+roteamento externo de alertas; TLS/auth e acessos negados precisam de testes reais com CNI que
+aplique as políticas. GPU requer imagem compatível fixada e device plugin, não apenas reserva de
+recurso. A #15 separa credenciais/permissões por consumidor e aplica quotas/concorrência
+compartilhadas entre réplicas, evitando multiplicar limites ao escalar. A prioridade operacional é
+validar isolamento, TLS e autorização antes de exposição pública, usando medições para dimensionar
+quotas e recursos.
+
+### #12 — retenção administrativa com proteção de leitores
+
+**O que mudou:** tarefas concluídas recebem timestamp; uma política persistida controla idade e
+lotes. CLI possui dry-run e limpeza efetiva; Helm oferece CronJob opcional. Destinos aposentados
+respeitam idade, quantidade de revisões, prazo de execuções e leitores. O consumidor híbrido adquire
+um lock compartilhado antes do snapshot e consulta do ponteiro. Falhas são preservadas, incluindo
+as superseded sem mensagem de erro; limpeza das tarefas restantes retoma em novas passagens.
+Counters de captura não são apagados e totais de limpeza sobrevivem à retenção opcional da auditoria.
+LGTM tem retenção explícita: Prometheus 7 dias/1 GB, Loki e Tempo 168 horas.
+
+**Positivos:** crescimento das tarefas concluídas controlável; manutenção previsível por lote;
+concorrência com enqueue e workers protegida; destinos antigos não somem durante snapshots
+cooperativos; métricas cumulativas e diagnóstico sobrevivem à limpeza. Defaults conservadores,
+sem drop de destinos ou expiração de auditoria automática.
+
+**Negativos:** timestamp/índice acrescentam escrita e manutenção; cada passagem consulta revisões
+aposentadas, ainda sem paginação dessa listagem. Lock global de leitores pode adiar drops de outras
+entidades. Habilitar drop exige atualizar todos os consumidores e reconhecer o protocolo; não é
+possível detectar leitores externos que ainda não acessaram a tabela. Falhas, configurações e
+metadados forenses continuam ocupando espaço. DELETE exige vacuum e não equivale a devolver disco;
+retenção dos backends também é assíncrona. Retenção finita reduz o histórico disponível para análise.
+
+**Evidência:** quatro cenários novos de integração cobrem cutoff, locks, snapshots, retomada,
+enqueue concorrente e agregados após pruning. Probe sintético com 10000 tarefas: plano indexado
+0,090 ms e 104 buffers contra 1,043 ms e 273 sem índice, uma amostra com cache aquecido. Não é
+benchmark de produção nem teste TEI; artefato [evaluation/retention.json](evaluation/retention.json).
+Operação, política, classificação de durabilidade e limites em [retention.md](retention.md).
+
+**Mitigações restantes:** #10 mede throughput/overhead/volume antes de particionar ou mudar batch;
+#26 trata custo de captura/snapshot; #27 valida backends, storage e alertas em produção. Outbox só
+será necessário para um novo requisito crítico que não esteja coberto pelo estado e auditoria
+transacionais; logs normais continuam sujeitos a perdas de buffer/exportação.
+
+**Validação final:** 38 integrações e 11 testes comuns passaram; check estático e packaging
+Compose/Helm também. A imagem administrativa executou dry-run/apply; os binários Loki e Tempo
+da imagem fixada validaram suas configurações. O CronJob foi renderizado, não executado em
+Kubernetes nesta entrega; expiração real após sete dias não foi aguardada.

@@ -84,8 +84,8 @@ privileges across all future LocalEmbed tables.
 administrative steps. Grant consumers access to the candidate destination before activation. Keep
 source writers paused during the current activation validation; it takes source locks. For a new
 revision, update its destination and helper grants before starting runtimes. Rollback currently
-prepares a fresh revision. Preserve old destinations for active reader snapshots until #12 defines
-safe cleanup.
+prepares a fresh revision. Preserve old destinations for active reader snapshots; enable cleanup only after adopting the
+[reader protection and retention policy](retention.md).
 
 Workers renew a 60-second lease every 20 seconds and have a 300-second execution deadline. Renewals
 fence late writes; retries can still repeat inference. Query retries follow the applied
@@ -93,10 +93,9 @@ fence late writes; retries can still repeat inference. Query retries follow the 
 per inference replica; it is a provider admission limit, not a per-consumer quota nor a shared
 cluster-wide limit. Configure Helm `inference.concurrency` or the corresponding Compose router
 argument (`LOCAL_EMBED_TEI_CONCURRENCY`). CPU limits and memory are configurable through
-`LOCAL_EMBED_TEI_CPUS` / `LOCAL_EMBED_TEI_MEMORY`. Queue retention scheduling (#12), online HNSW
-(#13), query token/prefix preparation (#14) and scoped permissions/quotas (#15) are not available
-yet. Do not configure an imaginary cleanup command: schedule the eventual bounded administrative job
-when #12 lands. Current HNSW construction uses ordinary transactional indexing and can block
+`LOCAL_EMBED_TEI_CPUS` / `LOCAL_EMBED_TEI_MEMORY`. Bounded queue cleanup and an optional Helm CronJob are available; see [retention](retention.md)
+for migration, dry-run, scheduling and reader acknowledgement. Online HNSW (#13), query token/prefix
+preparation (#14) and scoped permissions/quotas (#15) remain pending. Current HNSW construction uses ordinary transactional indexing and can block
 destination writes.
 
 ## Kubernetes / Helm

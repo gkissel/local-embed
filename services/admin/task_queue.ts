@@ -24,6 +24,9 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS retry_generation bigint NOT NULL DEFAULT 1;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS error_code text;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS provider_status integer;
+    ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS superseded_from_status text;
+    ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+    UPDATE localembed.tasks SET completed_at = clock_timestamp() WHERE status = 'done' AND completed_at IS NULL;
     ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS requested_at timestamptz NOT NULL DEFAULT now();`);
   await tx.unsafe(
     `ALTER TABLE localembed.tasks ADD COLUMN IF NOT EXISTS execution_started_at timestamptz;
@@ -57,6 +60,7 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
   }
   await tx.unsafe(
     `CREATE INDEX IF NOT EXISTS tasks_ready ON localembed.tasks (requested_at, id) WHERE status IN ('pending', 'processing');
+    CREATE INDEX IF NOT EXISTS tasks_retention ON localembed.tasks(completed_at, id) WHERE status = 'done' AND processed_generation = generation;
     DROP INDEX IF EXISTS localembed.tasks_available;
     CREATE OR REPLACE FUNCTION localembed.enqueue_task(revision bigint, entity_name text, identifier text, change_operation text, origin_name text)
     RETURNS void LANGUAGE plpgsql AS $enqueue$
@@ -68,7 +72,7 @@ export async function installTaskQueue(tx: postgres.TransactionSql): Promise<voi
       VALUES (revision, entity_name, identifier, change_operation)
       ON CONFLICT(configuration_id, entity, source_id) DO UPDATE SET
         generation = localembed.tasks.generation + 1,
-        operation = EXCLUDED.operation, requested_at = clock_timestamp(),
+        completed_at = NULL, operation = EXCLUDED.operation, requested_at = clock_timestamp(),
         next_attempt_at = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.next_attempt_at ELSE clock_timestamp() END,
         retry_generation = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.retry_generation ELSE localembed.tasks.generation + 1 END,
         status = CASE WHEN localembed.tasks.status IN ('processing','failed') THEN localembed.tasks.status ELSE 'pending' END,

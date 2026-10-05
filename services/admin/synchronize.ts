@@ -1,3 +1,4 @@
+import { installRetention } from './retention.ts';
 import { installCapture, installTaskQueue } from './task_queue.ts';
 import postgres from 'postgres';
 import { installPollingState } from './polling_state.ts';
@@ -30,6 +31,7 @@ export async function prepareWorker(url: string): Promise<void> {
         await tx.unsafe(`LOCK TABLE ${table(source)} IN SHARE ROW EXCLUSIVE MODE`);
       }
       await installTaskQueue(tx);
+      await installRetention(tx);
       await installPollingState(tx);
       for (const revision of revisions) {
         for (const entity of (revision.configuration as Configuration).entities) {

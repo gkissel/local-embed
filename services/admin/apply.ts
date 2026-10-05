@@ -1,3 +1,4 @@
+import { installRetention } from './retention.ts';
 import { installCapture, installTaskQueue } from './task_queue.ts';
 import { installRevisions } from './revisions.ts';
 import { installPollingState } from './polling_state.ts';
@@ -331,6 +332,7 @@ export async function applyConfiguration(
         }
       }
       await installTaskQueue(tx);
+      await installRetention(tx);
       await installPollingState(tx);
       const [revision] = await tx`INSERT INTO localembed.configurations (configuration) VALUES (${
         tx.json(config as unknown as postgres.JSONValue)

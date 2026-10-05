@@ -54,7 +54,7 @@ Deno.test({
       assertEquals(counts, { enqueued: 2, coalesced: 1 });
       await sql.unsafe(`CREATE ROLE localembed_snapshot_test NOLOGIN;
         GRANT USAGE ON SCHEMA localembed TO localembed_snapshot_test;
-        GRANT SELECT ON localembed.tasks, localembed.entity_revisions, localembed.enqueue_metrics, localembed.polling_state TO localembed_snapshot_test`);
+        GRANT SELECT ON localembed.tasks, localembed.entity_revisions, localembed.enqueue_metrics, localembed.polling_state, localembed.cleanup_totals TO localembed_snapshot_test`);
       const address = new URL(url);
       address.searchParams.set('options', '-c role=localembed_snapshot_test');
       store = new SnapshotStore(address.toString());

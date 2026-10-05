@@ -226,36 +226,48 @@ export class HybridSearch {
     const input = 'query: ' + query;
     for (let attempt = 0; attempt < 3; attempt++) {
       const generated = await this.generate(input);
+      const connection = await this.sql.reserve();
       try {
-        return await this.sql.begin('isolation level repeatable read read only', async (tx) => {
-          const generation = await active(tx);
-          if (
-            generated?.generation?.config_version !==
-              `${generation.config.version}@${generation.revision}`
-          ) throw new RevisionChanged();
-          if (
-            !Array.isArray(generated.embedding) ||
-            generated.embedding.length !== generation.provider.dimensions ||
-            !generated.embedding.every((value) =>
-              typeof value === 'number' && Number.isFinite(value)
-            ) ||
-            generated.embedding.every((value) => value === 0) ||
-            generated.dimensions !== generation.provider.dimensions ||
-            generated.model !== generation.provider.model ||
-            generated.provider !== generation.provider.name ||
-            generated.generation.fingerprint !==
-              await fingerprint(generation.entity, generation.provider, input)
-          ) {
-            throw new Error('Query generation metadata or vector is incompatible');
-          }
-          const ranked = await rank(tx, generation, generated.embedding, query, tenant, options);
-          return { revision: generation.revision, parameters: options, ...ranked };
-        });
+        // Session lock precedes BEGIN: a repeatable-read snapshot must not predate
+        // a cleanup that drops the destination before pointer resolution.
+        await connection`SELECT pg_advisory_lock_shared(78129413)`;
+        await connection.unsafe('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+        const tx = connection as unknown as postgres.TransactionSql;
+        const generation = await active(tx);
+        if (
+          generated?.generation?.config_version !==
+            `${generation.config.version}@${generation.revision}`
+        ) throw new RevisionChanged();
+        if (
+          !Array.isArray(generated.embedding) ||
+          generated.embedding.length !== generation.provider.dimensions ||
+          !generated.embedding.every((value) =>
+            typeof value === 'number' && Number.isFinite(value)
+          ) ||
+          generated.embedding.every((value) => value === 0) ||
+          generated.dimensions !== generation.provider.dimensions ||
+          generated.model !== generation.provider.model ||
+          generated.provider !== generation.provider.name ||
+          generated.generation.fingerprint !==
+            await fingerprint(generation.entity, generation.provider, input)
+        ) {
+          throw new Error('Query generation metadata or vector is incompatible');
+        }
+        const ranked = await rank(tx, generation, generated.embedding, query, tenant, options);
+        await connection.unsafe('COMMIT');
+        return { revision: generation.revision, parameters: options, ...ranked };
       } catch (cause) {
+        await connection.unsafe('ROLLBACK').catch(() => {});
         if (
           !(cause instanceof RevisionChanged) &&
           !(cause && typeof cause === 'object' && 'code' in cause && cause.code === '42P01')
         ) throw cause;
+      } finally {
+        try {
+          await connection`SELECT pg_advisory_unlock_shared(78129413)`;
+        } finally {
+          connection.release();
+        }
       }
     }
     throw new Error('Configuration changed repeatedly; retry the query later');

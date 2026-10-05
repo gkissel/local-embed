@@ -1,3 +1,4 @@
+import { cleanup, configureRetention } from './retention.ts';
 import { activate, cancelRevision, reprocess } from './revisions.ts';
 import { applyConfiguration } from './apply.ts';
 import { backfill, buildIndexes, prepareWorker } from './synchronize.ts';
@@ -29,6 +30,10 @@ try {
   ) {
     const count = await reprocess(databaseUrl, path, Deno.args[2], Deno.args[3]);
     console.log(JSON.stringify({ event: 'tasks_reprocessed', count }));
+  } else if (command === 'configure-retention' && path && Deno.args.length === 2) {
+    await configureRetention(databaseUrl, JSON.parse(await Deno.readTextFile(path)));
+  } else if (command === 'cleanup' && (!path || path === '--apply') && Deno.args.length <= 2) {
+    console.log(JSON.stringify(await cleanup(databaseUrl, path !== '--apply')));
   } else if (command === 'prepare-worker' && Deno.args.length === 1) {
     await prepareWorker(databaseUrl);
   } else if (command === 'backfill' && Deno.args.length === 1) {
@@ -36,7 +41,7 @@ try {
   } else if (command === 'build-indexes' && Deno.args.length === 1) {
     await buildIndexes(databaseUrl);
   } else {throw new Error(
-      'Usage: localembed migrate|stage <config.json> | activate|cancel <revision> | reprocess <revision> <entity> [source-id] | prepare-worker | backfill | build-indexes',
+      'Usage: localembed migrate|stage <config.json> | activate|cancel <revision> | reprocess <revision> <entity> [source-id] | configure-retention <policy.json> | cleanup [--apply] | prepare-worker | backfill | build-indexes',
     );}
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

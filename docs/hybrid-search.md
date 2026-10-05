@@ -198,3 +198,9 @@ Primary references:
 [ParadeDB hybrid-search example](https://www.paradedb.com/blog/hybrid-search-in-postgresql-the-missing-manual),
 [ParadeDB index reference](https://www.paradedb.com/docs/reference/indexing/create-index),
 [pgvector filtering/iterative scans](https://github.com/pgvector/pgvector#filtering).
+
+## Retention integration
+
+See [administrative retention](retention.md) for durable deletion counters, independent enqueue
+aggregate history, backend retention and the shared reader guard required before retired tables
+can be dropped. The hybrid consumer acquires the guard before opening its repeatable-read snapshot.

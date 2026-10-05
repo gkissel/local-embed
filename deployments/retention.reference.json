@@ -1,0 +1,10 @@
+{
+  "completed_seconds": 604800,
+  "batch_size": 100,
+  "retired_seconds": 2592000,
+  "keep_retired": 2,
+  "reader_grace_seconds": 3600,
+  "drop_retired_destinations": false,
+  "readers_use_lock_protocol": false,
+  "audit_seconds": null
+}
