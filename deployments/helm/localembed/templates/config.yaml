@@ -24,3 +24,5 @@ data:
 {{ .Files.Get "files/prometheus.yaml" | indent 4 }}
   alerts.yaml: |
 {{ .Files.Get "files/alerts.yaml" | indent 4 }}
+  loki.yaml: |
+{{ .Files.Get "files/loki.yaml" | indent 4 }}

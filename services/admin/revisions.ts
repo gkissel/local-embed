@@ -10,6 +10,10 @@ export async function installRevisions(tx: postgres.TransactionSql): Promise<voi
     configuration_id bigint NOT NULL REFERENCES localembed.configurations(id), entity text NOT NULL,
     state text NOT NULL CHECK(state IN ('active','staging','retired')), capture_namespace boolean NOT NULL DEFAULT false,
     PRIMARY KEY(configuration_id, entity));
+    ALTER TABLE localembed.entity_revisions ADD COLUMN IF NOT EXISTS retired_at timestamptz;
+    ALTER TABLE localembed.entity_revisions ADD COLUMN IF NOT EXISTS retired_execution_until timestamptz;
+    ALTER TABLE localembed.entity_revisions ADD COLUMN IF NOT EXISTS cleaned_at timestamptz;
+    UPDATE localembed.entity_revisions SET retired_at = clock_timestamp() WHERE state = 'retired' AND retired_at IS NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS entity_active ON localembed.entity_revisions(entity) WHERE state = 'active';
     CREATE UNIQUE INDEX IF NOT EXISTS entity_staging ON localembed.entity_revisions(entity) WHERE state = 'staging';
     CREATE OR REPLACE FUNCTION localembed.revision_eligible(revision bigint, entity_name text)
@@ -181,8 +185,8 @@ export async function activate(url: string, revision: string): Promise<void> {
             previous.capture_namespace,
             oldConfig.entities.indexOf(oldEntity),
           );
-          await tx`UPDATE localembed.entity_revisions SET state = 'retired' WHERE configuration_id = ${previous.configuration_id} AND entity = ${entity.name}`;
-          await tx`UPDATE localembed.tasks SET status = 'superseded', lease_token = NULL, lease_until = NULL, execution_deadline = NULL
+          await tx`UPDATE localembed.entity_revisions SET state = 'retired', retired_at = clock_timestamp(), retired_execution_until = (SELECT max(execution_deadline) FROM localembed.tasks WHERE configuration_id = ${previous.configuration_id} AND entity = ${entity.name}) WHERE configuration_id = ${previous.configuration_id} AND entity = ${entity.name}`;
+          await tx`UPDATE localembed.tasks SET superseded_from_status = status, status = 'superseded', lease_token = NULL, lease_until = NULL, execution_deadline = NULL
             WHERE configuration_id = ${previous.configuration_id} AND entity = ${entity.name} AND status <> 'done'`;
         }
         await tx`UPDATE localembed.entity_revisions SET state = 'active' WHERE configuration_id = ${revision} AND entity = ${entity.name}`;
@@ -228,8 +232,8 @@ export async function cancelRevision(url: string, revision: string): Promise<voi
           index,
         );
       }
-      await tx`UPDATE localembed.entity_revisions SET state = 'retired' WHERE configuration_id = ${revision}`;
-      await tx`UPDATE localembed.tasks SET status = 'superseded', lease_token = NULL, lease_until = NULL, execution_deadline = NULL WHERE configuration_id = ${revision} AND status <> 'done'`;
+      await tx`UPDATE localembed.entity_revisions SET state = 'retired', retired_at = clock_timestamp(), retired_execution_until = (SELECT max(execution_deadline) FROM localembed.tasks WHERE configuration_id = ${revision}) WHERE configuration_id = ${revision}`;
+      await tx`UPDATE localembed.tasks SET superseded_from_status = status, status = 'superseded', lease_token = NULL, lease_until = NULL, execution_deadline = NULL WHERE configuration_id = ${revision} AND status <> 'done'`;
       await tx`INSERT INTO localembed.admin_actions(action, details) VALUES ('cancel', ${
         tx.json({ revision })
       })`;

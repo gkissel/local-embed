@@ -232,7 +232,7 @@ export class Worker {
           }
         }
         const completed =
-          await tx`UPDATE localembed.tasks SET status = 'done', processed_generation = generation,
+          await tx`UPDATE localembed.tasks SET status = 'done', processed_generation = generation, completed_at = clock_timestamp(),
           lease_until = NULL, lease_token = NULL, execution_deadline = NULL, last_error = NULL, error_code = NULL, provider_status = NULL
           WHERE id = ${task.id} AND lease_token = ${token}::uuid
             AND lease_until > clock_timestamp() AND execution_deadline > clock_timestamp() RETURNING id`;

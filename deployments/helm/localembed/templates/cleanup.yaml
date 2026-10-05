@@ -1,0 +1,43 @@
+{{- if .Values.retention.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-cleanup
+spec:
+  schedule: {{ .Values.retention.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 60
+      template:
+        metadata:
+          labels: {app.kubernetes.io/instance: {{ .Release.Name }}, role: bootstrap}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          terminationGracePeriodSeconds: 45
+          securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: cleanup
+              image: {{ .Values.image | quote }}
+              args: [admin, cleanup, --apply]
+              securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+              resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+              env: [{name: DATABASE_URL_FILE, value: /run/secrets/admin_url}]
+              volumeMounts:
+                - {name: credentials, mountPath: /run/secrets, readOnly: true}
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: credentials
+              secret:
+                secretName: {{ .Values.adminSecretName }}
+                items: [{key: admin_url, path: admin_url}]
+            - name: tmp
+              emptyDir: {sizeLimit: 64Mi}
+{{- end }}

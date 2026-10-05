@@ -31,7 +31,9 @@ export class SnapshotStore {
         p.sweep_cursor IS NOT NULL AS source_started, p.delete_cursor IS NOT NULL AS delete_started
         FROM localembed.polling_state p JOIN localembed.entity_revisions v USING(configuration_id, entity)
         WHERE v.state IN ('active', 'staging')`;
-      return { queue, capture, polling };
+      const [cleanup] = await tx`SELECT completed::float8, superseded::float8, metadata::float8,
+        audit::float8, destinations::float8 FROM localembed.cleanup_totals WHERE singleton`;
+      return { queue, capture, polling, cleanup };
     });
   }
 }

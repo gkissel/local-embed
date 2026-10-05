@@ -29,6 +29,8 @@ spec:
           image: {{ .Values.dashboard.image | quote }}
           resources: {{ toYaml .Values.dashboard.resources | nindent 12 }}
           env:
+            - {name: TEMPO_EXTRA_ARGS, value: "--backend-scheduler.provider.work.compaction.block-retention=168h --backend-worker.compaction.block-retention=168h"}
+            - {name: PROMETHEUS_EXTRA_ARGS, value: "--storage.tsdb.retention.time=7d --storage.tsdb.retention.size=1GB"}
             - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "false"}
             - name: GF_SECURITY_ADMIN_PASSWORD
               valueFrom:
@@ -41,6 +43,7 @@ spec:
             periodSeconds: 10
           volumeMounts:
             - {name: data, mountPath: /data}
+            - {name: config, mountPath: /otel-lgtm/loki-config.yaml, subPath: loki.yaml, readOnly: true}
             - {name: config, mountPath: /otel-lgtm/prometheus.yaml, subPath: prometheus.yaml, readOnly: true}
             - {name: config, mountPath: /otel-lgtm/localembed-alerts.yaml, subPath: alerts.yaml, readOnly: true}
             - {name: config, mountPath: /otel-lgtm/otelcol-config.yaml, subPath: collector.yaml, readOnly: true}

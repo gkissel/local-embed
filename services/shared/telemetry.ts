@@ -28,7 +28,7 @@ const duration = meter.createHistogram('localembed_duration', {
 });
 
 export type EventContext = {
-  service: 'worker' | 'query-api' | 'poller' | 'telemetry';
+  service: 'worker' | 'query-api' | 'poller' | 'telemetry' | 'admin';
   entity?: string;
   configuration_id?: string | number;
   task_id?: string | number;

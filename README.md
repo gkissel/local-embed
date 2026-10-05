@@ -187,9 +187,9 @@ The provider request also has a 30-second timeout. A server already computing a 
 may continue its work, and a crash after receiving a vector but before committing can still cause
 repeat inference. Source updates and final writes briefly contend on the source row; final writes
 lock the source before the task to follow the trigger's lock order. Relevant changes still write
-queue state, and renewals add a write each interval. Queue retention and concurrent HNSW
-construction remain issues #12 and #13. Revision activation and retry operations are described
-below.
+queue state, and renewals add a write each interval. Bounded queue retention is described in
+[administrative retention](docs/retention.md); concurrent HNSW construction remains #13. Revision
+activation and retry operations are described below.
 
 See [the reproducible queue workload comparison](docs/queue-coordination.md).
 
@@ -282,8 +282,9 @@ the latest requested generation. Query retries run synchronously under the reque
 
 See [migration, runtime grants, retry policy, staging and rollback](docs/resilience.md). Upgrading
 existing installations requires stopping old runtimes, running `prepare-worker`, granting the new
-revision permissions and restarting. Old destinations are preserved; their eventual cleanup remains
-#12.
+revision permissions and restarting. Old destinations are preserved by default.
+[Administrative retention](docs/retention.md) provides dry-run and bounded cleanup; destination
+deletion requires the documented consumer reader protocol.
 
 ## Operational telemetry
 

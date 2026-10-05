@@ -26,7 +26,7 @@ try {
     GRANT SELECT, UPDATE ON localembed.tasks TO le_worker;
     GRANT SELECT, INSERT, UPDATE ON localembed.tasks, localembed.polling_state, localembed.enqueue_metrics TO le_poller;
     GRANT USAGE ON SEQUENCE localembed.tasks_id_seq TO le_poller;
-    GRANT SELECT ON localembed.tasks, localembed.polling_state, localembed.enqueue_metrics TO le_snapshot;
+    GRANT SELECT ON localembed.tasks, localembed.polling_state, localembed.enqueue_metrics, localembed.cleanup_totals TO le_snapshot;
     GRANT SELECT, INSERT, UPDATE, DELETE ON localembed.demo_article_embeddings TO le_worker;
     GRANT SELECT ON localembed.demo_article_embeddings TO le_poller, le_consumer;
     GRANT EXECUTE ON FUNCTION localembed.revision_eligible(bigint, text) TO le_worker, le_poller;

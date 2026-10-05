@@ -66,6 +66,8 @@ services:
   dashboard:
     image: grafana/otel-lgtm:0.35.0@sha256:2de1094c593c671cbfca878a28ffcd7e46ff5e32f2ce966c0cf33003f6cf4266
     environment:
+      PROMETHEUS_EXTRA_ARGS: "--storage.tsdb.retention.time=7d --storage.tsdb.retention.size=1GB"
+      TEMPO_EXTRA_ARGS: "--backend-scheduler.provider.work.compaction.block-retention=168h --backend-worker.compaction.block-retention=168h"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /otel-lgtm/grafana/conf/provisioning/dashboards/localembed/localembed.json
     entrypoint: [/bin/bash, -ec]
@@ -74,6 +76,7 @@ services:
     ports: ["127.0.0.1:${LOCAL_EMBED_GRAFANA_PORT:-3000}:3000"]
     volumes:
       - telemetry-data:/data
+      - ./telemetry/loki.yaml:/otel-lgtm/loki-config.yaml:ro
       - ./telemetry/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
       - ./telemetry/alerts.yaml:/otel-lgtm/localembed-alerts.yaml:ro
       - ./telemetry/collector.yaml:/otel-lgtm/otelcol-config.yaml:ro

@@ -71,3 +71,7 @@ administration:
   deadlineSeconds: 1800
   args: [admin, prepare-worker]
   configurationConfigMap: ""
+retention:
+  # Explicitly enable only after migration, grants and policy review.
+  enabled: false
+  schedule: "0 * * * *"

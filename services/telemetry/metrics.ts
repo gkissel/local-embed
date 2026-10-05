@@ -29,6 +29,13 @@ export class SnapshotMetrics {
         }
       });
     }
+    observableCounter('localembed_cleanup_deleted').addCallback((result) => {
+      for (
+        const kind of ['completed', 'superseded', 'metadata', 'audit', 'destinations'] as const
+      ) {
+        result.observe(this.snapshot?.cleanup?.[kind] ?? 0, { kind });
+      }
+    });
     for (const field of ['enqueued', 'coalesced', 'captured'] as const) {
       observableCounter(`localembed_${field}`).addCallback((result) => {
         for (const row of this.snapshot?.capture ?? []) {

@@ -93,7 +93,8 @@ describe refresh time, not an authoritative clock while the database is unavaila
 The durable enqueue counters use 16 shards per entity/origin to spread updates and are independent
 of task cleanup. They add one write per accepted enqueue and still introduce contention; no
 throughput benefit has been measured. Retention of these aggregate counters must be separate from
-task/revision cleanup (#12). Do not derive lifecycle history from reused task rows.
+task/revision cleanup; #12 keeps them cumulative with no automatic reset. Do not derive lifecycle
+history from reused task rows.
 
 Process counters reset on restart; Prometheus preserves exported time series across task cleanup and
 handles ordinary counter resets. Events occurring between exports may be lost on a crash or backend
@@ -166,3 +167,9 @@ checked.
 References: [Deno OpenTelemetry](https://docs.deno.com/runtime/fundamentals/open_telemetry/),
 [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/),
 [reference LGTM image](https://github.com/grafana/docker-otel-lgtm).
+
+## Retention integration
+
+See [administrative retention](retention.md) for durable deletion counters, independent enqueue
+aggregate history, backend retention and the shared reader guard required before retired tables
+can be dropped. The hybrid consumer acquires the guard before opening its repeatable-read snapshot.

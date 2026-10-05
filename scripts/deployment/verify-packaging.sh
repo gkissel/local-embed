@@ -3,14 +3,14 @@ set -eu
 cd "$(dirname "$0")/../.."
 helm=${HELM:-helm}
 chart=deployments/helm/localembed
-for file in collector.yaml dashboards.yaml localembed.json prometheus.yaml alerts.yaml; do
+for file in collector.yaml dashboards.yaml localembed.json prometheus.yaml alerts.yaml loki.yaml; do
   cmp "deployments/telemetry/$file" "$chart/files/$file"
 done
 cmp deployments/runtime/init-database.sh "$chart/files/init-database.sh"
 docker compose -f deployments/compose.yaml config --quiet
 "$helm" lint "$chart"
 "$helm" template localembed "$chart" >/dev/null
-"$helm" template alternate "$chart" --set worker.replicas=3 --set api.replicas=2 \
+"$helm" template alternate "$chart" --set retention.enabled=true --set worker.replicas=3 --set api.replicas=2 \
   --set inference.resources.limits.nvidia\\.com/gpu=1 >/dev/null
 # Invalid production configurations must fail rather than deploy the development bundle.
 if "$helm" template localembed "$chart" --set production=true >/dev/null 2>&1; then
