@@ -158,8 +158,9 @@ dependency tables, requires completed backfill and staged tasks, checks a valid 
 configured metric, and verifies every current source fingerprint plus absence of orphans.
 Verification uses batches but holds the administrative transaction/locks for the whole operation;
 large datasets can therefore pause writes for a significant time. Continuous incoming traffic may
-require a maintenance window to drain and validate the candidate. The current index build is still
-regular/transacted; online HNSW remains #13. No online, zero-downtime activation is promised.
+require a maintenance window to drain and validate the candidate. Use `build-indexes --concurrently`
+for live destination construction; [online indexes](online-indexes.md) describe verification,
+ownership and recovery. No online, zero-downtime activation is promised.
 
 Revision locking protects worker final writes and poller/enqueue transactions. Activation retires
 the previous entity revision, removes its capture triggers, marks unfinished old tasks superseded,

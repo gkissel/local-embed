@@ -109,8 +109,8 @@ reference article entity:
 `GRANT EXECUTE ON FUNCTION localembed.lock_source_article(text)
 TO localembed_worker`. Backfill,
 worker preparation, and index creation use the administrative role. Normal worker startup executes
-no DDL. The initial HNSW build uses a regular transactional index build; schedule it before
-production query load because it blocks destination writes while building.
+no DDL. The default HNSW build uses ordinary indexing; schedule it before production query load
+because it blocks destination writes while building.
 
 Inspect progress with:
 
@@ -188,8 +188,9 @@ may continue its work, and a crash after receiving a vector but before committin
 repeat inference. Source updates and final writes briefly contend on the source row; final writes
 lock the source before the task to follow the trigger's lock order. Relevant changes still write
 queue state, and renewals add a write each interval. Bounded queue retention is described in
-[administrative retention](docs/retention.md); concurrent HNSW construction remains #13. Revision
-activation and retry operations are described below.
+[administrative retention](docs/retention.md). Use `build-indexes --concurrently` for live
+destinations; [index operation and recovery](docs/online-indexes.md) describe its costs and
+safeguards. Revision activation and retry operations are described below.
 
 See [the reproducible queue workload comparison](docs/queue-coordination.md).
 

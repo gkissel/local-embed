@@ -437,3 +437,49 @@ transacionais; logs normais continuam sujeitos a perdas de buffer/exportação.
 Compose/Helm também. A imagem administrativa executou dry-run/apply; os binários Loki e Tempo
 da imagem fixada validaram suas configurações. O CronJob foi renderizado, não executado em
 Kubernetes nesta entrega; expiração real após sete dias não foi aguardada.
+
+### Mitigações de retenção após #12
+
+Lotes/frequência fora de pico e autovacuum precisam de medição de backlog, WAL, latência, tuplas
+mortas e espaço reutilizado (#10). Particionamento depende do volume medido; VACUUM FULL exige
+janela planejada. Timeout de consultas/transações, alertas de snapshots longos e migração gradual
+com DROP desabilitado integram #27. A #28 fornece helper compartilhado e proteção por destino para
+não adiar limpeza de entidades independentes. A #29 define investigação/resolução, arquivamento e
+retenção de falhas/metadados, preservando trabalho acionável e a janela de rollback da #24.
+
+### #13 — construção HNSW concorrente e retomável
+
+**O que mudou:** `build-indexes --concurrently` executa CREATE/DROP INDEX CONCURRENTLY fora de
+transações explícitas, com posse administrativa na mesma sessão física até o encerramento.
+Inspeciona definição, destino, coluna, métrica, parâmetros e flags de validade;
+reutiliza índice correto, corrige metadados e recria somente índice inválido com definição esperada.
+Ativação usa a mesma validação. Backfill enfileirado precisa terminar; fila incremental pode continuar
+ocupada. O modo comum permanece para carga inicial offline. Auditoria registra início/fim por entidade.
+
+**Positivos:** escritas continuam durante construção concorrente; retomada após cancelamento/crash;
+conflitos de nome/definição não são apagados automaticamente; posse impede administradores de
+concorrer com ativação/limpeza; nenhum DDL foi adicionado ao startup dos workers.
+
+**Negativos:** construção concorrente faz mais trabalho e pode esperar transações/snapshots longos;
+HNSW consome CPU, memória, I/O e WAL e pode disputar recursos com consultas. O lock administrativo
+global adia outras operações, incluindo retenção. Não há prazo fixo para construir índice; timeout
+fica na política do papel/banco. Uma execução com várias entidades pode terminar parcialmente,
+pois DDL concorrente não oferece rollback único para toda a execução. Ativação ainda bloqueia
+escritas na origem; a #23 trata esse ponto.
+
+**Evidência:** 41 testes de integração passaram, incluindo cancelamento, índice inválido e perda
+real de sessão administrativa; 11 testes comuns passaram. Probe com 10000 vetores sintéticos de
+64 dimensões: construção comum ~1039 ms, escrita interrompida por timeout de 1000 ms; concorrente
+~1021 ms, escrita confirmada em ~2,4 ms durante CREATE INDEX. Uma amostra por modo, sem medição de
+CPU/memória/I/O nem inferência real; não demonstra superioridade de throughput/duração em produção.
+Artefato [evaluation/indexes.json](evaluation/indexes.json); operação em
+[online-indexes.md](online-indexes.md). Dimensionamento comparativo segue na #10; produção na #27.
+
+**Problema encontrado:** no teste de encerramento forçado da sessão, tentar desbloquear por SQL na
+conexão reservada já quebrada podia impedir a finalização do comando. A correção encerra a sessão
+física com prazo de fechamento, liberando a posse sem uma nova consulta nessa conexão. O teste
+verifica recuperação por uma nova execução.
+
+**Validação final:** check estático passou; a imagem runtime foi reconstruída e executou
+`admin build-indexes --concurrently` no ParadeDB real. Os testes desta entrega não acrescentam
+validação TEI/GPU/Kubernetes; essas evidências permanecem nas issues específicas.

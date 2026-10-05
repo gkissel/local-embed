@@ -94,9 +94,10 @@ per inference replica; it is a provider admission limit, not a per-consumer quot
 cluster-wide limit. Configure Helm `inference.concurrency` or the corresponding Compose router
 argument (`LOCAL_EMBED_TEI_CONCURRENCY`). CPU limits and memory are configurable through
 `LOCAL_EMBED_TEI_CPUS` / `LOCAL_EMBED_TEI_MEMORY`. Bounded queue cleanup and an optional Helm CronJob are available; see [retention](retention.md)
-for migration, dry-run, scheduling and reader acknowledgement. Online HNSW (#13), query token/prefix
-preparation (#14) and scoped permissions/quotas (#15) remain pending. Current HNSW construction uses ordinary transactional indexing and can block
-destination writes.
+for migration, dry-run, scheduling and reader acknowledgement. Use `build-indexes --concurrently`
+for live destinations; see [online index operation](online-indexes.md).
+Query token/prefix preparation (#14) and scoped permissions/quotas (#15) remain pending.
+Default ordinary HNSW construction can block destination writes.
 
 ## Kubernetes / Helm
 
