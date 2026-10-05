@@ -1,0 +1,67 @@
+{
+  "source": "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=2020-01-01&endtime=2020-02-01&minmagnitude=6&orderby=time-asc&limit=12",
+  "retrieved_at": 1791205504000,
+  "source_response_sha256": "22be6fb9111be5b65a032ef955c75df25de444765cf1aae97fcb4d3cbf1ee26a",
+  "rows": [
+    {
+      "external_id": "us70006vkq",
+      "title": "M 6.3 - 14 km S of Sinabang, Indonesia",
+      "body": "Magnitude 6.3; location 14 km S of Sinabang, Indonesia; origin epoch milliseconds 1578377119759"
+    },
+    {
+      "external_id": "pr2020007007",
+      "title": "M 6.4 - 4 km SSE of Indios, Puerto Rico",
+      "body": "Magnitude 6.4; location 4 km SSE of Indios, Puerto Rico; origin epoch milliseconds 1578385467370"
+    },
+    {
+      "external_id": "us70006vvr",
+      "title": "M 6.0 - 130 km ENE of Kimbe, Papua New Guinea",
+      "body": "Magnitude 6; location 130 km ENE of Kimbe, Papua New Guinea; origin epoch milliseconds 1578424295665"
+    },
+    {
+      "external_id": "us70006wuf",
+      "title": "M 6.4 - Chukotskiy Avtonomnyy Okrug, Russia",
+      "body": "Magnitude 6.4; location Chukotskiy Avtonomnyy Okrug, Russia; origin epoch milliseconds 1578559088278"
+    },
+    {
+      "external_id": "us60007a3h",
+      "title": "M 6.0 - 146 km W of Abepura, Indonesia",
+      "body": "Magnitude 6; location 146 km W of Abepura, Indonesia; origin epoch milliseconds 1579365494301"
+    },
+    {
+      "external_id": "us60007anp",
+      "title": "M 6.0 - 104 km ENE of Kashgar, China",
+      "body": "Magnitude 6; location 104 km ENE of Kashgar, China; origin epoch milliseconds 1579440476630"
+    },
+    {
+      "external_id": "us60007arp",
+      "title": "M 6.1 - 108 km SE of Gorontalo, Indonesia",
+      "body": "Magnitude 6.1; location 108 km SE of Gorontalo, Indonesia; origin epoch milliseconds 1579453100002"
+    },
+    {
+      "external_id": "us60007b5x",
+      "title": "M 6.1 - South Sandwich Islands region",
+      "body": "Magnitude 6.1; location South Sandwich Islands region; origin epoch milliseconds 1579503097818"
+    },
+    {
+      "external_id": "us60007djn",
+      "title": "M 6.2 - 84 km W of Adak, Alaska",
+      "body": "Magnitude 6.2; location 84 km W of Adak, Alaska; origin epoch milliseconds 1579758782618"
+    },
+    {
+      "external_id": "us60007ewc",
+      "title": "M 6.7 - 13 km N of Do?anyol, Turkey",
+      "body": "Magnitude 6.7; location 13 km N of Do?anyol, Turkey; origin epoch milliseconds 1579888514147"
+    },
+    {
+      "external_id": "us60007g8m",
+      "title": "M 6.1 - 240 km WSW of Adak, Alaska",
+      "body": "Magnitude 6.1; location 240 km WSW of Adak, Alaska; origin epoch milliseconds 1580020315398"
+    },
+    {
+      "external_id": "us60007gyx",
+      "title": "M 6.3 - 102 km WNW of Kirakira, Solomon Islands",
+      "body": "Magnitude 6.3; location 102 km WNW of Kirakira, Solomon Islands; origin epoch milliseconds 1580101321704"
+    }
+  ]
+}

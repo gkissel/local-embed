@@ -1,0 +1,1682 @@
+{
+  "issue": 10,
+  "harness_sha256": {
+    "scripts/evaluation/run.ts": "90c28ba8c71990c820f4e0e45275dd9e4dd25d00092ff50be8e8b269724c4656",
+    "scripts/evaluation/statistics.ts": "c12caf99e8dbb073a24ae05a17c617a50fb588596e16d42ae9e14d67cae59316",
+    "scripts/evaluation/run.sh": "67a3ce11ec660fba72e9d2b3c70f8f25511b4894534ef7d4fd067c74f42f67f4",
+    "scripts/evaluation/observe.py": "52e40bebc15329b0eee22c1a6280c4a9461e215f1fe65b9934296f11017edaa7",
+    "scripts/evaluation/finish_report.py": "3a4ca464950e1eb37ce1e252ca2251ea520f61f3faeb15db6ea63218b13d6eb3"
+  },
+  "runner_sha256": "90c28ba8c71990c820f4e0e45275dd9e4dd25d00092ff50be8e8b269724c4656",
+  "git_worktree_dirty": true,
+  "started_at": "2026-10-05T13:40:52.303Z",
+  "recorded_at": "2026-10-05T13:41:24.783Z",
+  "git_revision": "7d2fe057db7f83fedf5489e1af2393dcbd92bdd2",
+  "workload": {
+    "synthetic_rows": 16,
+    "public_rows": 12,
+    "polled_rows": 4,
+    "workers": 2,
+    "backfill_batch": 8,
+    "poller_batch": 8,
+    "lease_seconds": 1,
+    "renew_every_ms": 100,
+    "max_execution_ms": 30000,
+    "unrelated_updates": 10,
+    "unchanged_updates": 10,
+    "burst_updates": 20,
+    "query_samples": 6
+  },
+  "public_dataset": {
+    "source": "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=2020-01-01&endtime=2020-02-01&minmagnitude=6&orderby=time-asc&limit=12",
+    "fixture": "docs/evaluation/data/usgs-2020-01.json",
+    "sha256": "286ed9763870316fe9d529bfb829f6dae5c371e321c5b386f754c20f8f0ecf30",
+    "source_response_sha256": "22be6fb9111be5b65a032ef955c75df25de444765cf1aae97fcb4d3cbf1ee26a"
+  },
+  "inference": {
+    "mode": "real pinned TEI except explicitly injected faults",
+    "model": "intfloat/multilingual-e5-base",
+    "revision": "129286372ebbc09af0394786dd03e16427ade171",
+    "dimensions": 768,
+    "warmup_request_ms": 1082.42598,
+    "preflight_ms": 1736.7184250000005,
+    "model_download_and_startup_excluded": true,
+    "container_readiness_seconds": 51.0,
+    "model_cache_volume_existed_before_start": true
+  },
+  "environment": {
+    "deno": {
+      "deno": "2.9.7",
+      "v8": "15.0.245.2-rusty",
+      "typescript": "6.0.3"
+    },
+    "catalog": [
+      {
+        "postgres": "PostgreSQL 18.3 (Debian 18.3-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+        "extname": "pg_search",
+        "extversion": "0.22.6"
+      },
+      {
+        "postgres": "PostgreSQL 18.3 (Debian 18.3-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+        "extname": "vector",
+        "extversion": "0.8.1"
+      }
+    ],
+    "settings": [
+      {
+        "name": "maintenance_work_mem",
+        "setting": "65536",
+        "unit": "kB"
+      },
+      {
+        "name": "max_parallel_maintenance_workers",
+        "setting": "2",
+        "unit": null
+      },
+      {
+        "name": "max_parallel_workers",
+        "setting": "8",
+        "unit": null
+      },
+      {
+        "name": "shared_buffers",
+        "setting": "16384",
+        "unit": "8kB"
+      }
+    ],
+    "configuration": {
+      "version": "localembed/v1",
+      "providers": [
+        {
+          "name": "local_tei",
+          "type": "tei",
+          "endpoint": "http://127.0.0.1:18080",
+          "model": "intfloat/multilingual-e5-base",
+          "dimensions": 768,
+          "metric": "cosine",
+          "max_batch_size": 32,
+          "secret_env": "LOCAL_EMBED_TEI_API_KEY"
+        }
+      ],
+      "entities": [
+        {
+          "name": "article",
+          "source": {
+            "table": "public.evaluation_articles",
+            "id": {
+              "column": "id",
+              "type": "bigint"
+            },
+            "detection": {
+              "mode": "trigger"
+            }
+          },
+          "provider": "local_tei",
+          "fields": [
+            "title",
+            "body",
+            "id"
+          ],
+          "dependencies": [
+            {
+              "name": "category",
+              "relation": "one",
+              "fields": [
+                "name"
+              ],
+              "source_column": "category_id",
+              "target": {
+                "table": "public.evaluation_categories",
+                "id": {
+                  "column": "id",
+                  "type": "bigint"
+                }
+              }
+            }
+          ],
+          "template": "passage: {{title}}\n{{body}}\n{{category.name}}\neval-id:{{id}}",
+          "destination": {
+            "table": "localembed.evaluation_embeddings",
+            "hnsw": {
+              "m": 16,
+              "ef_construction": 64
+            }
+          }
+        },
+        {
+          "name": "polled_article",
+          "source": {
+            "table": "public.evaluation_polled",
+            "id": {
+              "column": "id",
+              "type": "bigint"
+            },
+            "detection": {
+              "mode": "polling",
+              "updated_at": "updated_at",
+              "overlap_seconds": 0
+            }
+          },
+          "provider": "local_tei",
+          "fields": [
+            "title",
+            "body",
+            "id"
+          ],
+          "dependencies": [
+            {
+              "name": "category",
+              "relation": "one",
+              "fields": [
+                "name"
+              ],
+              "source_column": "category_id",
+              "target": {
+                "table": "public.evaluation_categories",
+                "id": {
+                  "column": "id",
+                  "type": "bigint"
+                }
+              }
+            }
+          ],
+          "template": "passage: {{title}}\n{{body}}\n{{category.name}}\neval-id:{{id}}",
+          "destination": {
+            "table": "localembed.evaluation_polled_embeddings"
+          }
+        }
+      ],
+      "operations": {
+        "backfill": {
+          "batch_size": 8
+        },
+        "reconciliation": {
+          "interval_seconds": 60
+        },
+        "retries": {
+          "max_attempts": 3,
+          "base_delay_ms": 10,
+          "max_delay_ms": 50
+        }
+      }
+    },
+    "telemetry": "ordinary structured events; no OTLP exporter/LGTM enabled for this run"
+  },
+  "scenarios": [
+    {
+      "name": "initial_backfill",
+      "mutation_ms": 355.40920000000006,
+      "elapsed_ms": 16148.017315000001,
+      "observed_cluster_wal_bytes_delta": "10747719",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 34,
+      "provider_latency_ms": {
+        "count": 34,
+        "min": 109.62644399999954,
+        "p50": 357.8995560000003,
+        "p95": 2043.3853,
+        "p99": 2573.2231039999997,
+        "max": 2573.2231039999997,
+        "mean": 633.8604722352944
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "pending",
+          "count": 28
+        },
+        {
+          "entity": "polled_article",
+          "status": "pending",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 32,
+        "min": 1818.032,
+        "p50": 11387.91,
+        "p95": 15709.277,
+        "p99": 15829.049,
+        "max": 15829.049,
+        "mean": 11064.223875
+      },
+      "completed_task_rows": 32,
+      "completed_rows_per_second": 1.9816674317208582,
+      "attempts_per_second": 2.1055216462034116
+    },
+    {
+      "name": "unrelated_unchanged",
+      "mutation_ms": 236.75193999999829,
+      "elapsed_ms": 237.86866699999882,
+      "observed_cluster_wal_bytes_delta": "2475",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 0,
+      "provider_latency_ms": {
+        "count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null,
+        "mean": null
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "done",
+          "count": 28
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null,
+        "mean": null
+      },
+      "completed_task_rows": 0,
+      "completed_rows_per_second": 0,
+      "attempts_per_second": 0
+    },
+    {
+      "name": "burst_coalescing",
+      "mutation_ms": 243.9458760000016,
+      "elapsed_ms": 327.41552800000136,
+      "observed_cluster_wal_bytes_delta": "21914",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 1,
+      "provider_latency_ms": {
+        "count": 1,
+        "min": 55.193420999999944,
+        "p50": 55.193420999999944,
+        "p95": 55.193420999999944,
+        "p99": 55.193420999999944,
+        "max": 55.193420999999944,
+        "mean": 55.193420999999944
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "done",
+          "count": 27
+        },
+        {
+          "entity": "article",
+          "status": "pending",
+          "count": 1
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 1,
+        "min": 86.574,
+        "p50": 86.574,
+        "p95": 86.574,
+        "p99": 86.574,
+        "max": 86.574,
+        "mean": 86.574
+      },
+      "completed_task_rows": 1,
+      "completed_rows_per_second": 3.0542228895142562,
+      "attempts_per_second": 3.0542228895142562
+    },
+    {
+      "name": "dependency_fanout",
+      "mutation_ms": 17.146498000001884,
+      "elapsed_ms": 8060.17582,
+      "observed_cluster_wal_bytes_delta": "11370153",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 28,
+      "provider_latency_ms": {
+        "count": 28,
+        "min": 138.75357900000017,
+        "p50": 278.3307590000004,
+        "p95": 1112.815945000002,
+        "p99": 1144.777943000001,
+        "max": 1144.777943000001,
+        "mean": 388.3354924642863
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "pending",
+          "count": 28
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 28,
+        "min": 186.053,
+        "p50": 2809.51,
+        "p95": 7805.371,
+        "p99": 8017.695,
+        "max": 8017.695,
+        "mean": 3833.7666785714287
+      },
+      "completed_task_rows": 28,
+      "completed_rows_per_second": 3.473869630799195,
+      "attempts_per_second": 3.473869630799195
+    },
+    {
+      "name": "transient_retry",
+      "mutation_ms": 39.13264900000286,
+      "elapsed_ms": 249.41142000000036,
+      "observed_cluster_wal_bytes_delta": "10829",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 2,
+      "provider_latency_ms": {
+        "count": 1,
+        "min": 49.35381799999959,
+        "p50": 49.35381799999959,
+        "p95": 49.35381799999959,
+        "p99": 49.35381799999959,
+        "max": 49.35381799999959,
+        "mean": 49.35381799999959
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "done",
+          "count": 27
+        },
+        {
+          "entity": "article",
+          "status": "pending",
+          "count": 1
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 1,
+        "min": 150.577,
+        "p50": 150.577,
+        "p95": 150.577,
+        "p99": 150.577,
+        "max": 150.577,
+        "mean": 150.577
+      },
+      "completed_task_rows": 1,
+      "completed_rows_per_second": 4.009439503612138,
+      "attempts_per_second": 8.018879007224276
+    },
+    {
+      "name": "terminal_failure",
+      "mutation_ms": 12.054595999998128,
+      "elapsed_ms": 44.09733099999721,
+      "observed_cluster_wal_bytes_delta": "0",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 1,
+      "provider_latency_ms": {
+        "count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null,
+        "mean": null
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "done",
+          "count": 27
+        },
+        {
+          "entity": "article",
+          "status": "pending",
+          "count": 1
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null,
+        "mean": null
+      },
+      "completed_task_rows": 0,
+      "completed_rows_per_second": 0,
+      "attempts_per_second": 22.677109415081453
+    },
+    {
+      "name": "explicit_reprocess",
+      "mutation_ms": 33.025141999998596,
+      "elapsed_ms": 174.7334379999993,
+      "observed_cluster_wal_bytes_delta": "2567",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 1,
+      "provider_latency_ms": {
+        "count": 1,
+        "min": 108.5584830000007,
+        "p50": 108.5584830000007,
+        "p95": 108.5584830000007,
+        "p99": 108.5584830000007,
+        "max": 108.5584830000007,
+        "mean": 108.5584830000007
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "done",
+          "count": 27
+        },
+        {
+          "entity": "article",
+          "status": "pending",
+          "count": 1
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 1,
+        "min": 142.041,
+        "p50": 142.041,
+        "p95": 142.041,
+        "p99": 142.041,
+        "max": 142.041,
+        "mean": 142.041
+      },
+      "completed_task_rows": 1,
+      "completed_rows_per_second": 5.723003057949355,
+      "attempts_per_second": 5.723003057949355
+    },
+    {
+      "name": "lease_renewal",
+      "mutation_ms": 11.850574000000051,
+      "elapsed_ms": 612.8139259999989,
+      "observed_cluster_wal_bytes_delta": "5675",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 1,
+      "provider_latency_ms": {
+        "count": 1,
+        "min": 565.1495849999992,
+        "p50": 565.1495849999992,
+        "p95": 565.1495849999992,
+        "p99": 565.1495849999992,
+        "max": 565.1495849999992,
+        "mean": 565.1495849999992
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "done",
+          "count": 27
+        },
+        {
+          "entity": "article",
+          "status": "pending",
+          "count": 1
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 1,
+        "min": 599.853,
+        "p50": 599.853,
+        "p95": 599.853,
+        "p99": 599.853,
+        "max": 599.853,
+        "mean": 599.853
+      },
+      "completed_task_rows": 1,
+      "completed_rows_per_second": 1.6318167025466743,
+      "attempts_per_second": 1.6318167025466743
+    },
+    {
+      "name": "polling_reconciliation",
+      "mutation_ms": 131.2023420000005,
+      "elapsed_ms": 921.3621949999979,
+      "observed_cluster_wal_bytes_delta": "21685",
+      "wal_note": "Cumulative asynchronous PostgreSQL cluster statistics; includes background work and may flush across phase boundaries. Not exact per-statement WAL attribution.",
+      "attempts": 3,
+      "provider_latency_ms": {
+        "count": 3,
+        "min": 230.60481199999776,
+        "p50": 233.20893100000103,
+        "p95": 393.54230599999937,
+        "p99": 393.54230599999937,
+        "max": 393.54230599999937,
+        "mean": 285.78534966666604
+      },
+      "queue_after_mutation": [
+        {
+          "entity": "article",
+          "status": "done",
+          "count": 28
+        },
+        {
+          "entity": "polled_article",
+          "status": "pending",
+          "count": 4
+        }
+      ],
+      "note": "Latency samples are latest completed generations requested within this phase; coalesced intermediate source versions have no completion sample.",
+      "retained_completion_latency_ms": {
+        "count": 4,
+        "min": 495.51,
+        "p50": 505.96,
+        "p95": 813.956,
+        "p99": 813.956,
+        "max": 813.956,
+        "mean": 593.4195
+      },
+      "completed_task_rows": 4,
+      "completed_rows_per_second": 4.341398010149537,
+      "attempts_per_second": 3.2560485076121526
+    }
+  ],
+  "provider_calls": [
+    {
+      "phase": "initial_backfill",
+      "id": "1",
+      "ms": 1359.064297,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "2",
+      "ms": 2573.2231039999997,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "3",
+      "ms": 900.4488789999996,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "4",
+      "ms": 2043.3853,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "5",
+      "ms": 934.5623329999999,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "6",
+      "ms": 2009.333118999999,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "7",
+      "ms": 1207.4948550000008,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "8",
+      "ms": 1512.1758200000004,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "7",
+      "ms": 109.62644399999954,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "8",
+      "ms": 283.04039999999986,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "10",
+      "ms": 218.68248200000016,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "9",
+      "ms": 356.6573500000013,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "11",
+      "ms": 139.74446399999943,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "12",
+      "ms": 246.7831670000014,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "13",
+      "ms": 224.61329599999954,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "14",
+      "ms": 399.1585840000007,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "15",
+      "ms": 239.84739799999988,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "16",
+      "ms": 523.8365389999999,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "17",
+      "ms": 560.0811419999991,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "18",
+      "ms": 271.21835999999894,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "19",
+      "ms": 315.0213110000004,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "20",
+      "ms": 600.1501290000015,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "21",
+      "ms": 268.9279110000025,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "22",
+      "ms": 484.4680530000005,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "23",
+      "ms": 147.66101100000014,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "24",
+      "ms": 333.99111000000266,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "25",
+      "ms": 637.8507580000005,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "26",
+      "ms": 625.4909069999994,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "27",
+      "ms": 276.2699360000006,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "28",
+      "ms": 565.8308680000009,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "1",
+      "ms": 442.2664339999974,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "2",
+      "ms": 133.58356400000048,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "3",
+      "ms": 248.8671749999994,
+      "outcome": "ok"
+    },
+    {
+      "phase": "initial_backfill",
+      "id": "4",
+      "ms": 357.8995560000003,
+      "outcome": "ok"
+    },
+    {
+      "phase": "burst_coalescing",
+      "id": "1",
+      "ms": 55.193420999999944,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "2",
+      "ms": 140.3567350000012,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "1",
+      "ms": 251.54563300000154,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "3",
+      "ms": 154.66922800000248,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "4",
+      "ms": 366.0359219999991,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "6",
+      "ms": 138.75357900000017,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "5",
+      "ms": 258.3837050000002,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "7",
+      "ms": 341.78751399999965,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "8",
+      "ms": 555.7808680000016,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "10",
+      "ms": 251.96817600000213,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "9",
+      "ms": 523.8487690000002,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "11",
+      "ms": 168.14204699999755,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "12",
+      "ms": 276.9036379999998,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "13",
+      "ms": 139.19412700000248,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "14",
+      "ms": 256.63970999999947,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "15",
+      "ms": 695.4032079999997,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "16",
+      "ms": 690.5095599999986,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "17",
+      "ms": 511.54922799999986,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "18",
+      "ms": 1112.815945000002,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "19",
+      "ms": 492.85369100000025,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "20",
+      "ms": 1144.777943000001,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "21",
+      "ms": 278.3307590000004,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "22",
+      "ms": 526.5704650000007,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "24",
+      "ms": 181.23832199999742,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "23",
+      "ms": 372.9695180000017,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "25",
+      "ms": 174.62089000000196,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "26",
+      "ms": 350.06412700000146,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "28",
+      "ms": 173.37094300000172,
+      "outcome": "ok"
+    },
+    {
+      "phase": "dependency_fanout",
+      "id": "27",
+      "ms": 344.3095390000017,
+      "outcome": "ok"
+    },
+    {
+      "phase": "transient_retry",
+      "id": "2",
+      "ms": 0.2323550000000978,
+      "outcome": "injected_transient"
+    },
+    {
+      "phase": "transient_retry",
+      "id": "2",
+      "ms": 49.35381799999959,
+      "outcome": "ok"
+    },
+    {
+      "phase": "terminal_failure",
+      "id": "3",
+      "ms": 0.11937299999772222,
+      "outcome": "injected_terminal"
+    },
+    {
+      "phase": "explicit_reprocess",
+      "id": "3",
+      "ms": 108.5584830000007,
+      "outcome": "ok"
+    },
+    {
+      "phase": "lease_renewal",
+      "id": "4",
+      "ms": 565.1495849999992,
+      "outcome": "ok"
+    },
+    {
+      "phase": "polling_reconciliation",
+      "id": "3",
+      "ms": 233.20893100000103,
+      "outcome": "ok"
+    },
+    {
+      "phase": "polling_reconciliation",
+      "id": "4",
+      "ms": 393.54230599999937,
+      "outcome": "ok"
+    },
+    {
+      "phase": "polling_reconciliation",
+      "id": "1",
+      "ms": 230.60481199999776,
+      "outcome": "ok"
+    },
+    {
+      "phase": "query_repeated",
+      "id": null,
+      "ms": 109.2071649999998,
+      "outcome": "ok"
+    },
+    {
+      "phase": "query_repeated",
+      "id": null,
+      "ms": 115.07019700000092,
+      "outcome": "ok"
+    },
+    {
+      "phase": "query_repeated",
+      "id": null,
+      "ms": 138.07585000000108,
+      "outcome": "ok"
+    },
+    {
+      "phase": "query_repeated",
+      "id": null,
+      "ms": 457.0333470000005,
+      "outcome": "ok"
+    },
+    {
+      "phase": "query_repeated",
+      "id": null,
+      "ms": 93.16643999999724,
+      "outcome": "ok"
+    },
+    {
+      "phase": "query_repeated",
+      "id": null,
+      "ms": 100.42491200000222,
+      "outcome": "ok"
+    }
+  ],
+  "rates": {
+    "total_attempts": 77,
+    "injected_transient": 1,
+    "injected_terminal": 1,
+    "natural_provider_failures": 0,
+    "injection_failure_fraction": 0.025974025974025976
+  },
+  "assertions": {
+    "verified_fresh_embeddings": 31,
+    "unrelated_unchanged_captures": 0,
+    "lease_renewed": true,
+    "retained_terminal_failure_before_reprocess": 1,
+    "polling_delete_reconciled": true,
+    "capture_history_preserved": true
+  },
+  "query": {
+    "cache_implemented": false,
+    "latency_ms": {
+      "count": 6,
+      "min": 94.81697500000155,
+      "p50": 116.80670400000236,
+      "p95": 458.7823669999998,
+      "p99": 458.7823669999998,
+      "max": 458.7823669999998,
+      "mean": 173.02808283333374
+    },
+    "first_ms": 124.20250099999976,
+    "subsequent_ms": {
+      "count": 5,
+      "min": 94.81697500000155,
+      "p50": 116.80670400000236,
+      "p95": 458.7823669999998,
+      "p99": 458.7823669999998,
+      "max": 458.7823669999998,
+      "mean": 182.79319920000052
+    },
+    "full_samples_ms": [
+      124.20250099999976,
+      116.80670400000236,
+      141.307671999999,
+      458.7823669999998,
+      94.81697500000155,
+      102.25227799999993
+    ]
+  },
+  "snapshot": {
+    "latency_ms": {
+      "count": 10,
+      "min": 1.0819629999969038,
+      "p50": 1.190085000002,
+      "p95": 18.826458999999886,
+      "p99": 18.826458999999886,
+      "max": 18.826458999999886,
+      "mean": 3.0401389999995443
+    },
+    "before_cleanup": {
+      "queue": [
+        {
+          "entity": "polled_article",
+          "status": "pending",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "polled_article",
+          "status": "processing",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "polled_article",
+          "status": "failed",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "depth": 4,
+          "age": 2.221461,
+          "execution_age": 2.140988
+        },
+        {
+          "entity": "polled_article",
+          "status": "superseded",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "pending",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "processing",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "failed",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "done",
+          "depth": 28,
+          "age": 11.418797,
+          "execution_age": 11.402394
+        },
+        {
+          "entity": "article",
+          "status": "superseded",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        }
+      ],
+      "capture": [
+        {
+          "entity": "polled_article",
+          "enqueued": 8,
+          "coalesced": 0,
+          "captured": null
+        },
+        {
+          "entity": "article",
+          "enqueued": 79,
+          "coalesced": 19,
+          "captured": 51
+        }
+      ],
+      "polling": [
+        {
+          "entity": "polled_article",
+          "configuration_id": "1",
+          "phase": "source",
+          "cursor_lag": 2.165665,
+          "window_lag": 2.15024,
+          "reconcile_overdue": 0,
+          "source_started": false,
+          "delete_started": false
+        }
+      ],
+      "cleanup": {
+        "completed": 0,
+        "superseded": 0,
+        "metadata": 0,
+        "audit": 0,
+        "destinations": 0
+      }
+    },
+    "after_cleanup": {
+      "queue": [
+        {
+          "entity": "polled_article",
+          "status": "pending",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "polled_article",
+          "status": "processing",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "polled_article",
+          "status": "failed",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "polled_article",
+          "status": "done",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "polled_article",
+          "status": "superseded",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "pending",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "processing",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "failed",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "done",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        },
+        {
+          "entity": "article",
+          "status": "superseded",
+          "depth": 0,
+          "age": 0,
+          "execution_age": 0
+        }
+      ],
+      "capture": [
+        {
+          "entity": "polled_article",
+          "enqueued": 8,
+          "coalesced": 0,
+          "captured": null
+        },
+        {
+          "entity": "article",
+          "enqueued": 79,
+          "coalesced": 19,
+          "captured": 51
+        }
+      ],
+      "polling": [
+        {
+          "entity": "polled_article",
+          "configuration_id": "1",
+          "phase": "source",
+          "cursor_lag": 2.538719,
+          "window_lag": 2.523296,
+          "reconcile_overdue": 0,
+          "source_started": false,
+          "delete_started": false
+        }
+      ],
+      "cleanup": {
+        "completed": 32,
+        "superseded": 0,
+        "metadata": 0,
+        "audit": 0,
+        "destinations": 0
+      }
+    }
+  },
+  "maintenance": {
+    "online_index_ms": 222.79210700000112,
+    "retention": {
+      "retained_before": 32,
+      "deleted": 32,
+      "passes": 5
+    },
+    "catalog_sizes": [
+      {
+        "relname": "admin_actions",
+        "bytes": "32768"
+      },
+      {
+        "relname": "backfills",
+        "bytes": "32768"
+      },
+      {
+        "relname": "cleanup_totals",
+        "bytes": "24576"
+      },
+      {
+        "relname": "configurations",
+        "bytes": "32768"
+      },
+      {
+        "relname": "enqueue_metrics",
+        "bytes": "32768"
+      },
+      {
+        "relname": "entity_revisions",
+        "bytes": "57344"
+      },
+      {
+        "relname": "evaluation_embeddings",
+        "bytes": "442368"
+      },
+      {
+        "relname": "evaluation_polled_embeddings",
+        "bytes": "122880"
+      },
+      {
+        "relname": "polling_state",
+        "bytes": "32768"
+      },
+      {
+        "relname": "retention_policy",
+        "bytes": "32768"
+      },
+      {
+        "relname": "tasks",
+        "bytes": "114688"
+      }
+    ],
+    "table_statistics": [
+      {
+        "relname": "admin_actions",
+        "n_live_tup": "6",
+        "n_dead_tup": "0",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "backfills",
+        "n_live_tup": "2",
+        "n_dead_tup": "9",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "cleanup_totals",
+        "n_live_tup": "1",
+        "n_dead_tup": "0",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "configurations",
+        "n_live_tup": "1",
+        "n_dead_tup": "0",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "enqueue_metrics",
+        "n_live_tup": "32",
+        "n_dead_tup": "51",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "entity_revisions",
+        "n_live_tup": "2",
+        "n_dead_tup": "0",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "evaluation_embeddings",
+        "n_live_tup": "28",
+        "n_dead_tup": "7",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "evaluation_polled_embeddings",
+        "n_live_tup": "4",
+        "n_dead_tup": "1",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "polling_state",
+        "n_live_tup": "0",
+        "n_dead_tup": "0",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "retention_policy",
+        "n_live_tup": "1",
+        "n_dead_tup": "0",
+        "last_autovacuum": null
+      },
+      {
+        "relname": "tasks",
+        "n_live_tup": "32",
+        "n_dead_tup": "198",
+        "last_autovacuum": null
+      }
+    ],
+    "retention_plan": [
+      {
+        "QUERY PLAN": [
+          {
+            "Plan": {
+              "Node Type": "Limit",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 3.13,
+              "Total Cost": 3.14,
+              "Plan Rows": 1,
+              "Plan Width": 22,
+              "Actual Startup Time": 0.04,
+              "Actual Total Time": 0.058,
+              "Actual Rows": 32,
+              "Actual Loops": 1,
+              "Disabled": false,
+              "Shared Hit Blocks": 37,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "LockRows",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Startup Cost": 3.13,
+                  "Total Cost": 3.14,
+                  "Plan Rows": 1,
+                  "Plan Width": 22,
+                  "Actual Startup Time": 0.039,
+                  "Actual Total Time": 0.055,
+                  "Actual Rows": 32,
+                  "Actual Loops": 1,
+                  "Disabled": false,
+                  "Shared Hit Blocks": 37,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Sort",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 3.13,
+                      "Total Cost": 3.13,
+                      "Plan Rows": 1,
+                      "Plan Width": 22,
+                      "Actual Startup Time": 0.029,
+                      "Actual Total Time": 0.03,
+                      "Actual Rows": 32,
+                      "Actual Loops": 1,
+                      "Disabled": false,
+                      "Sort Key": [
+                        "completed_at",
+                        "id"
+                      ],
+                      "Sort Method": "quicksort",
+                      "Sort Space Used": 26,
+                      "Sort Space Type": "Memory",
+                      "Shared Hit Blocks": 5,
+                      "Shared Read Blocks": 0,
+                      "Shared Dirtied Blocks": 0,
+                      "Shared Written Blocks": 0,
+                      "Local Hit Blocks": 0,
+                      "Local Read Blocks": 0,
+                      "Local Dirtied Blocks": 0,
+                      "Local Written Blocks": 0,
+                      "Temp Read Blocks": 0,
+                      "Temp Written Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Seq Scan",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Relation Name": "tasks",
+                          "Alias": "tasks",
+                          "Startup Cost": 0,
+                          "Total Cost": 3.12,
+                          "Plan Rows": 1,
+                          "Plan Width": 22,
+                          "Actual Startup Time": 0.007,
+                          "Actual Total Time": 0.015,
+                          "Actual Rows": 32,
+                          "Actual Loops": 1,
+                          "Disabled": false,
+                          "Filter": "((completed_at <= '2026-10-05 13:41:24.417+00'::timestamp with time zone) AND (status = 'done'::text) AND (processed_generation = generation))",
+                          "Rows Removed by Filter": 0,
+                          "Shared Hit Blocks": 2,
+                          "Shared Read Blocks": 0,
+                          "Shared Dirtied Blocks": 0,
+                          "Shared Written Blocks": 0,
+                          "Local Hit Blocks": 0,
+                          "Local Read Blocks": 0,
+                          "Local Dirtied Blocks": 0,
+                          "Local Written Blocks": 0,
+                          "Temp Read Blocks": 0,
+                          "Temp Written Blocks": 0
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "Planning": {
+              "Shared Hit Blocks": 25,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0
+            },
+            "Planning Time": 0.165,
+            "Triggers": [],
+            "Execution Time": 0.072
+          }
+        ]
+      }
+    ]
+  },
+  "resources": {
+    "shared_deno_process": {
+      "peak_rss_bytes": 126623744,
+      "cpu_user_us": 1322084,
+      "cpu_system_us": 220443,
+      "elapsed_ms": 32480.233705
+    },
+    "note": "Admin/workers/poller/API/snapshot share this process; role RSS cannot be attributed separately. Docker resource samples are produced by the shell driver.",
+    "containers": {
+      "localembed-evaluation-db": {
+        "sample_count": 17,
+        "sampled_peak_memory_bytes": 74469867,
+        "mean_sampled_cpu_percent": 3.8188235294117647,
+        "peak_sampled_cpu_percent": 21.79,
+        "first_block_io": "14.3MB / 141MB",
+        "last_block_io": "21.7MB / 195MB",
+        "first_network_io": "13.5kB / 11.6kB",
+        "last_network_io": "1.12MB / 742kB",
+        "limits": {
+          "Memory": 2147483648,
+          "NanoCpus": 2000000000,
+          "ShmSize": 268435456
+        },
+        "image_id": "sha256:2359a3628682f2dfc4ee65ed59f6a993d7851ed3d820b0c030c397ff7168b620",
+        "repo_digests": [
+          "paradedb/paradedb@sha256:2359a3628682f2dfc4ee65ed59f6a993d7851ed3d820b0c030c397ff7168b620"
+        ]
+      },
+      "localembed-evaluation-tei": {
+        "sample_count": 17,
+        "sampled_peak_memory_bytes": 2081985396,
+        "mean_sampled_cpu_percent": 337.1941176470588,
+        "peak_sampled_cpu_percent": 412.66,
+        "first_block_io": "1.09GB / 0B",
+        "last_block_io": "1.09GB / 0B",
+        "first_network_io": "23.1kB / 6.7kB",
+        "last_network_io": "76kB / 796kB",
+        "limits": {
+          "Memory": 4294967296,
+          "NanoCpus": 4000000000,
+          "ShmSize": 67108864
+        },
+        "image_id": "sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c",
+        "repo_digests": [
+          "ghcr.io/huggingface/text-embeddings-inference@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c"
+        ]
+      }
+    },
+    "method": "Docker stats --no-stream samples, raw units preserved. CPU % is Docker core-relative; sampled memory is not an exact peak. Block/network I/O are cumulative container counters, not phase-attributed PostgreSQL reads."
+  },
+  "related_probes": [
+    "docs/evaluation/indexes.json",
+    "docs/evaluation/retention.json",
+    "docs/evaluation/hybrid-storage.json",
+    "docs/evaluation/deployment.json"
+  ],
+  "limitations": [
+    "Small functional/operational baseline, not production sizing or retrieval-quality evaluation.",
+    "Nearest-rank percentiles have small sample counts; source requested-to-completed includes queue and injected delay, not commit-to-observation latency.",
+    "Public titles use real data; synthetic mutations deliberately replace some content.",
+    "Future cache/quota/token/dependency/CDC/counter toggles are not implemented and cannot receive before/after measurements yet.",
+    "No standalone runtime-by-role resource measurement, cold model download benchmark or real second-model dimension rollout in this run."
+  ],
+  "host": {
+    "platform": "Linux-7.2.8-1-cachyos-x86_64-with-glibc2.44",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_cpus": 16,
+    "memory_bytes": 32431194112,
+    "load_average_at_finish": [
+      19.53564453125,
+      15.52392578125,
+      13.7158203125
+    ],
+    "cgroup_cpu_max": null,
+    "cgroup_memory_max": null
+  },
+  "resource_trace": "docs/evaluation/artifact-resources.jsonl"
+}
