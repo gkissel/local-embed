@@ -38,10 +38,12 @@ try {
     await prepareWorker(databaseUrl);
   } else if (command === 'backfill' && Deno.args.length === 1) {
     await backfill(databaseUrl);
-  } else if (command === 'build-indexes' && Deno.args.length === 1) {
-    await buildIndexes(databaseUrl);
+  } else if (
+    command === 'build-indexes' && (!path || path === '--concurrently') && Deno.args.length <= 2
+  ) {
+    await buildIndexes(databaseUrl, path === '--concurrently');
   } else {throw new Error(
-      'Usage: localembed migrate|stage <config.json> | activate|cancel <revision> | reprocess <revision> <entity> [source-id] | configure-retention <policy.json> | cleanup [--apply] | prepare-worker | backfill | build-indexes',
+      'Usage: localembed migrate|stage <config.json> | activate|cancel <revision> | reprocess <revision> <entity> [source-id] | configure-retention <policy.json> | cleanup [--apply] | prepare-worker | backfill | build-indexes [--concurrently]',
     );}
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

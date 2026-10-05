@@ -1,3 +1,4 @@
+import { validManagedIndex } from './indexes.ts';
 import postgres from 'postgres';
 import { removeCapture } from './task_queue.ts';
 import type { Configuration } from './apply.ts';
@@ -125,17 +126,9 @@ export async function activate(url: string, revision: string): Promise<void> {
           await tx`SELECT 1 FROM localembed.tasks WHERE configuration_id = ${revision} AND entity = ${entity.name} AND status <> 'done' LIMIT 1`;
         if (pending.length) throw new Error('Drain staged tasks before activation');
         const provider = config.providers.find((item) => item.name === entity.provider)!;
-        const op = {
-          cosine: 'vector_cosine_ops',
-          dot_product: 'vector_ip_ops',
-          l2: 'vector_l2_ops',
-        }[provider.metric];
-        const valid =
-          await tx`SELECT 1 FROM pg_index i JOIN pg_class idx ON idx.oid = i.indexrelid JOIN pg_am am ON am.oid = idx.relam JOIN pg_opclass op ON op.oid = i.indclass[0]
-          WHERE i.indrelid = to_regclass(${
-            table(entity.destination.table)
-          }) AND i.indisvalid AND am.amname = 'hnsw' AND op.opcname = ${op}`;
-        if (!valid.length) throw new Error('Destination needs a valid matching HNSW index');
+        if (!await validManagedIndex(tx, entity, provider)) {
+          throw new Error('Destination needs a valid matching HNSW index');
+        }
         let cursor: string | null = null;
         while (true) {
           const ids: { identifier: string }[] = await tx.unsafe(

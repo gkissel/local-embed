@@ -1,0 +1,45 @@
+{
+  "workload": {
+    "rows": 10000,
+    "dimensions": 64,
+    "m": 16,
+    "ef_construction": 64,
+    "provider": "not called; synthetic vectors",
+    "samples_per_mode": 1,
+    "write_timeout_ms": 1000,
+    "cpu_memory_io_measured": false
+  },
+  "versions": [
+    {
+      "postgres": "PostgreSQL 18.3 (Debian 18.3-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+      "extname": "pg_search",
+      "extversion": "0.22.6"
+    },
+    {
+      "postgres": "PostgreSQL 18.3 (Debian 18.3-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+      "extname": "vector",
+      "extversion": "0.8.1"
+    }
+  ],
+  "runs": [
+    {
+      "online": false,
+      "observed_create": true,
+      "duration_ms": 1038.7402869999999,
+      "write": "statement_timeout",
+      "write_duration_ms": 1010.6096980000001,
+      "write_completed_during_build": false,
+      "index_bytes": "5718016"
+    },
+    {
+      "online": true,
+      "observed_create": true,
+      "duration_ms": 1021.4318890000002,
+      "write": "committed",
+      "write_duration_ms": 2.4087819999999738,
+      "write_completed_during_build": true,
+      "index_bytes": "5709824"
+    }
+  ],
+  "limitations": "Sequential warm-host runs, synthetic vectors, one sample each; not throughput, TEI or production sizing. Write timeout probes relation lock behavior."
+}
